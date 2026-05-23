@@ -56,11 +56,15 @@ P0 - Direct oppakken
   - Done: 2026-05-23
   - Progress: `offf-core::hash` bevat nu `generate_merkle_proof`, `verify_merkle_proof` en volledige `merkle_tree.bin` structuurvalidatie met level/internal-node checks; `offf-verify` gebruikt deze validatie, vergelijkt leaves met `physical_to_chunk` volgorde, en ondersteunt `--proof-chunk` voor proof generatie + verificatie
 
-- [ ] Hardening Sprint 5: verifier profiles + leaves consistency (P0)
+- [x] Hardening Sprint 5: verifier profiles + leaves consistency (P0)
   - Add profiles: `core`, `core+schemas`, `core+extensions`, `conformance`
   - Add machine-readable JSON report output
   - Validate `hashes/leaves.parquet` against `maps/physical_to_chunk.parquet`
   - Extend provenance validation (required fields, uniqueness, invalid JSONL detection)
+  - Added: 2026-05-23
+  - Status: done
+  - Done: 2026-05-23
+  - Progress: `offf-verify` ondersteunt nu `--profile` + `--report`; conformance-profiel schrijft machine-readable JSON rapport; `leaves.parquet` wordt sequence/hash-gewijs vergeleken met `physical_to_chunk`; provenance checks valideren JSON parsebaarheid, verplichte velden, unieke `event_id` en monotone `evt-` ordering
 
 - [ ] Hardening Sprint 6: append-only analysis model (P0)
   - Move worker outputs to `analysis/jobs/{job_id}/...`
