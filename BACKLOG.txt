@@ -1,6 +1,113 @@
 OFFF Backlog
 ============
 
+Hardening Program v0.2 (Forensic-grade)
+=======================================
+
+P0 - Direct oppakken
+--------------------
+
+- [x] Hardening Sprint 0: repository baseline en docs entrypoint (P0)
+  - Add root `README.md` as canonical project entrypoint
+  - Add `docs/status.md` with stable/experimental/planned matrix
+  - Link root docs to spec + schema catalog + status matrix
+  - Added: 2026-05-23
+  - Status: done
+  - Done: 2026-05-23
+  - Progress: root `README.md` toegevoegd met quickstart/build/examples + referenties; `docs/status.md` toegevoegd en gelinkt vanuit root README
+  - Acceptance:
+    - Root README exists and contains quickstart and architecture overview
+    - Status matrix exists and is linked from README
+
+- [ ] Hardening Sprint 1: crash-safe convert finalisatie (P0)
+  - Convert writes to temporary output directory (`{output}.tmp-{uuid}`)
+  - Write `manifest.json` strictly as finalization point
+  - Perform self-check before publish and atomic rename on local FS
+  - Add object-store completion marker (`_OFFF_COMPLETE`) for S3 mode
+
+- [ ] Hardening Sprint 2: verify existing chunks before dedup skip (P0)
+  - In `write_chunk`, verify stored and plaintext hashes when chunk exists
+  - Reuse chunk only on full match; fail-fast on mismatch/corruption
+  - Add unit tests for valid existing chunk and corrupt existing chunk
+
+- [ ] Hardening Sprint 3: true deterministic mode + sector-size parameter (P0)
+  - Add `--sector-size` (default 512), persist in manifest and acquisition params
+  - Make deterministic timestamps and event IDs stable for identical input
+  - Ensure repeated deterministic runs produce byte-equivalent metadata
+
+- [ ] Hardening Sprint 4: Merkle proofs + full tree validation (P0)
+  - Add inclusion proof generate/verify functions in `offf-core`
+  - Add CLI interface for proof generation/verification
+  - Validate `merkle_tree.bin` structure (magic, version, lengths, levels, root consistency)
+
+- [ ] Hardening Sprint 5: verifier profiles + leaves consistency (P0)
+  - Add profiles: `core`, `core+schemas`, `core+extensions`, `conformance`
+  - Add machine-readable JSON report output
+  - Validate `hashes/leaves.parquet` against `maps/physical_to_chunk.parquet`
+  - Extend provenance validation (required fields, uniqueness, invalid JSONL detection)
+
+- [ ] Hardening Sprint 6: append-only analysis model (P0)
+  - Move worker outputs to `analysis/jobs/{job_id}/...`
+  - Add per-job `result_manifest.json` with output artifact hashes
+  - Add correction events as append-only records (no in-place mutations)
+
+- [ ] Hardening Sprint 7: Access Service production auth + denied audit (P0)
+  - Add `OFFF_AUTH_MODE=dev_headers|jwt|mtls`
+  - Enforce trusted role/tool identity from claims/cert in production modes
+  - Persist denied writes to append-only denied event log
+  - Harden write path validation (no evidence layer writes, no traversal, no overwrite)
+
+- [ ] Hardening Sprint 8: CI + CLI E2E + negative conformance datasets (P0)
+  - Enforce `cargo fmt --check`
+  - Enforce `cargo clippy --workspace --all-targets -- -D warnings`
+  - Enforce `cargo test --workspace` and release build
+  - Add end-to-end CLI workflows and negative datasets with machine-readable outcomes
+
+P1 - Daarna
+-----------
+
+- [ ] OFFF v0.2 manifest extensions foundation (P1)
+  - Add optional `extensions` section to `ManifestJson`
+  - Add v0.2 schema catalog entries and compatibility tests for v0.1 readers
+
+- [ ] Generic extension types + append-only APIs (P1)
+  - Add core structs and schemas: labels, scopes, sets, decisions, policy refs, access/denied/audit events
+  - Add Access Service REST/gRPC append-only extension endpoints
+  - Add validator checks for extension schema and referential integrity
+
+- [ ] Scope-aware jobs and workers (P1)
+  - Extend `JobManifest` with `scope_ref`, `include_sets`, `exclude_sets`, `exclude_labels`
+  - Enforce effective scope in workers and emit audit events for skipped items
+
+- [ ] Object-per-event append model for object storage (P1)
+  - Replace JSONL read-modify-write patterns with immutable event objects
+  - Provide index rebuild path from event objects to derived JSONL indexes
+
+- [ ] Indexing hardening GPT/MBR and worker quality upgrades (P1)
+  - GPT CRC + backup GPT checks
+  - Extended MBR/EBR support
+  - file_id resolution for hits and chunk-boundary matching support
+
+- [ ] Python SDK hardening and forward compatibility (P1)
+  - Bounded LRU chunk cache and cache disable option
+  - Append-only analysis writer APIs (job-specific)
+  - Version profile support for 0.1.x and 0.2.x with safe extension ignore
+
+P2 - Later
+----------
+
+- [ ] Threat model and security mapping (P2)
+  - Add `docs/threat-model.md` with threat-to-mitigation-to-test traceability
+
+- [ ] Versioning policy and migration path (P2)
+  - Add `docs/versioning.md`
+  - Add `offf-migrate` path from v0.1 to v0.2 with evidence hash invariants
+
+- [ ] NTFS forensic depth improvements (P2)
+  - ATTRIBUTE_LIST support
+  - ADS/sparse/compressed/encrypted modeling
+  - Streaming parser memory hardening
+
 - [x] OFFF packed container (single-file) initial implementation (P1)
   - Add core packed container format with deterministic index + checksum footer
   - Add pack/list/unpack operations for `.offfpack`
