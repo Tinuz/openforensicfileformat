@@ -273,6 +273,95 @@ impl ContainerRef {
             }
         }
     }
+
+    pub fn list_relative_keys(&self, rel_prefix: &str) -> Result<Vec<String>, OfffError> {
+        match self {
+            Self::Local(base) => {
+                let root = base.join(rel_prefix);
+                if !root.exists() {
+                    return Ok(Vec::new());
+                }
+
+                let mut out = Vec::new();
+                collect_local_relative(&root, base, &mut out)?;
+                out.sort();
+                Ok(out)
+            }
+            Self::S3 { bucket, prefix } => {
+                let list_prefix = join_key(prefix, rel_prefix);
+                let client = s3_client()?;
+                let rt = tokio::runtime::Runtime::new().map_err(|e| {
+                    OfffError::InvalidContainer(format!("failed to start async runtime: {e}"))
+                })?;
+
+                let mut continuation: Option<String> = None;
+                let mut out = Vec::new();
+                loop {
+                    let mut req = client
+                        .list_objects_v2()
+                        .bucket(bucket)
+                        .prefix(&list_prefix);
+                    if let Some(token) = continuation.as_deref() {
+                        req = req.continuation_token(token);
+                    }
+
+                    let resp = rt.block_on(async { req.send().await }).map_err(|e| {
+                        OfffError::InvalidContainer(format!(
+                            "failed to list s3://{bucket}/{list_prefix}: {e}"
+                        ))
+                    })?;
+
+                    for obj in resp.contents() {
+                        if let Some(key) = obj.key() {
+                            if key.ends_with('/') {
+                                continue;
+                            }
+                            let rel = if prefix.is_empty() {
+                                key.to_string()
+                            } else {
+                                key.strip_prefix(&format!("{}/", prefix.trim_matches('/')))
+                                    .unwrap_or(key)
+                                    .to_string()
+                            };
+                            out.push(rel);
+                        }
+                    }
+
+                    continuation = resp
+                        .next_continuation_token()
+                        .map(|s| s.to_string());
+                    if continuation.is_none() {
+                        break;
+                    }
+                }
+
+                out.sort();
+                Ok(out)
+            }
+        }
+    }
+}
+
+fn collect_local_relative(
+    dir: &std::path::Path,
+    base: &std::path::Path,
+    out: &mut Vec<String>,
+) -> Result<(), OfffError> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if entry.file_type()?.is_dir() {
+            collect_local_relative(&path, base, out)?;
+        } else {
+            let rel = path
+                .strip_prefix(base)
+                .map_err(|_| OfffError::InvalidContainer("failed to relativize local path".to_string()))?
+                .to_string_lossy()
+                .replace('\\', "/");
+            out.push(rel);
+        }
+    }
+    Ok(())
 }
 
 fn is_precondition_error(msg: &str) -> bool {

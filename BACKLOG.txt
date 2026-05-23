@@ -72,13 +72,15 @@ OFFF Backlog
   - Added: 2026-05-22
   - Done: 2026-05-22
 
-- [ ] Access Service: storage backends parity (P0)
+- [x] Access Service: storage backends parity (P0)
   - Extend case resolution beyond local filesystem
   - Add S3/MinIO/Ceph object-store support in access-service read/write flows
   - Add parity tests local vs s3:// case paths
   - Owner: next implementation cycle
   - Added: 2026-05-22
-  - Status: ready in current environment (lokale MinIO/S3 test-endpoint geconfigureerd)
+  - Status: done
+  - Done: 2026-05-23
+  - Progress: access-service gebruikt nu `ContainerRef` voor local + `s3://` case-resolutie en read/write flows (manifest/chunk verify, file index, artifacts, analysis append, provenance append); parity smoke test toegevoegd in `crates/offf-access-service/tests/grpc_storage_parity.rs`
 
 - [x] Conformance suite + integration profiles (P0)
   - Create official PASS/FAIL conformance suite for:
@@ -104,13 +106,15 @@ OFFF Backlog
   - Added: 2026-05-22
     - Done: 2026-05-22
 
-- [ ] Go SDK minimal profile implementation (P1)
+- [x] Go SDK minimal profile implementation (P1)
   - Create `sdk/go` with API parity for minimum OFFF SDK surface
   - Include container open/read/verify + analysis/provenance append APIs
   - Add smoke tests against sample OFFF container
   - Owner: next implementation cycle
   - Added: 2026-05-22
-  - Status: ready in current environment (`go` beschikbaar, versie 1.26.3)
+  - Status: done
+  - Done: 2026-05-23
+  - Progress: `sdk/go` toegevoegd met minimale API (`OpenContainer`, `ReadManifest`, `VerifyContainer`, `ReadChunk`, `VerifyChunk`, `MapOffsetToChunk`, `ReadFileIndex`, `WriteAnalysisResult`, `AppendProvenanceEvent`) + smoke test `sdk/go/sdk_test.go` en CI job `go-sdk-smoke`
 
 - [x] Tool registry + governance artifacts (P1)
   - Define schema and storage for approved tool registry

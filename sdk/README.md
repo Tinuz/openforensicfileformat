@@ -5,6 +5,7 @@ De `sdk` map bevat client libraries voor OFFF use-cases zoals lezen, verifieren 
 
 ## Beschikbare SDK's
 - `python/`: Python SDK met minimale contract-surface en tests.
+- `go/`: Go SDK met minimale OFFF API-surface en smoke test.
 
 ## Richtlijnen
 - Houd API-pariteit met het afgesproken minimale OFFF SDK-profiel.

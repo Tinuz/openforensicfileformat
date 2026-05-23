@@ -1,7 +1,7 @@
 use std::{
     env, fs,
     net::SocketAddr,
-    path::{Path, PathBuf},
+    path::Path,
 };
 
 use anyhow::{Context, Result};
@@ -17,10 +17,9 @@ use axum::{
     Json, Router,
 };
 use offf_core::{
-    chunk::{read_chunk, verify_chunk},
-    parquet_io::read_physical_to_chunk,
-    provenance::ProvenanceWriter,
-    types::{ChunkMetadata, ManifestJson},
+    parquet_io::read_physical_to_chunk_bytes,
+    storage::{read_chunk_verified, ContainerRef},
+    types::{ChunkMetadata, ManifestJson, ToolInfo},
 };
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use serde::{Deserialize, Serialize};
@@ -41,8 +40,8 @@ use grpc::{
 
 #[derive(Clone)]
 struct AppState {
-    cases_root: PathBuf,
-    tool_registry_path: PathBuf,
+    cases_root: String,
+    tool_registry_path: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -170,8 +169,8 @@ async fn main() -> Result<()> {
         .context("invalid OFFF_ACCESS_GRPC_BIND")?;
 
     let state = AppState {
-        cases_root: PathBuf::from(cases_root),
-        tool_registry_path: PathBuf::from(tool_registry_path),
+        cases_root,
+        tool_registry_path,
     };
 
     let app = Router::new()
@@ -221,8 +220,8 @@ impl OfffAccessService for GrpcAccessService {
         request: Request<GetManifestRequest>,
     ) -> Result<GrpcResponse<GetManifestResponse>, Status> {
         let req = request.into_inner();
-        let case_path = resolve_case_path(&self.state, &req.case_id).map_err(grpc_status)?;
-        let value = read_json_file(&case_path.join("manifest.json")).map_err(grpc_status)?;
+        let case_ref = resolve_case_ref(&self.state, &req.case_id).map_err(grpc_status)?;
+        let value = read_json_file(&case_ref, "manifest.json").map_err(grpc_status)?;
         let manifest_json = serde_json::to_string(&value)
             .map_err(|e| Status::new(Code::Internal, e.to_string()))?;
         Ok(GrpcResponse::new(GetManifestResponse { manifest_json }))
@@ -233,9 +232,9 @@ impl OfffAccessService for GrpcAccessService {
         request: Request<GetChunkRequest>,
     ) -> Result<GrpcResponse<GetChunkResponse>, Status> {
         let req = request.into_inner();
-        let (case_path, _, chunks) = load_case_data(&self.state, &req.case_id).map_err(grpc_status)?;
+        let (case_ref, _, chunks) = load_case_data(&self.state, &req.case_id).map_err(grpc_status)?;
         let chunk = find_chunk(&chunks, &req.chunk_id).map_err(grpc_status)?;
-        let plaintext = read_chunk(&case_path, chunk)
+        let plaintext = read_chunk_verified(&case_ref, chunk)
             .map_err(ApiError::from)
             .map_err(grpc_status)?;
         Ok(GrpcResponse::new(GetChunkResponse { plaintext }))
@@ -246,9 +245,9 @@ impl OfffAccessService for GrpcAccessService {
         request: Request<VerifyChunkRequest>,
     ) -> Result<GrpcResponse<GrpcVerifyChunkResponse>, Status> {
         let req = request.into_inner();
-        let (case_path, _, chunks) = load_case_data(&self.state, &req.case_id).map_err(grpc_status)?;
+        let (case_ref, _, chunks) = load_case_data(&self.state, &req.case_id).map_err(grpc_status)?;
         let chunk = find_chunk(&chunks, &req.chunk_id).map_err(grpc_status)?;
-        verify_chunk(&case_path, chunk)
+        read_chunk_verified(&case_ref, chunk)
             .map_err(ApiError::from)
             .map_err(grpc_status)?;
         Ok(GrpcResponse::new(GrpcVerifyChunkResponse { ok: true }))
@@ -259,13 +258,13 @@ impl OfffAccessService for GrpcAccessService {
         request: Request<ListFilesRequest>,
     ) -> Result<GrpcResponse<ListFilesResponse>, Status> {
         let req = request.into_inner();
-        let case_path = resolve_case_path(&self.state, &req.case_id).map_err(grpc_status)?;
+        let case_ref = resolve_case_ref(&self.state, &req.case_id).map_err(grpc_status)?;
         let partition = if req.partition_id.trim().is_empty() {
             None
         } else {
             Some(req.partition_id.as_str())
         };
-        let rows = list_file_index_values(&case_path, partition).map_err(grpc_status)?;
+        let rows = list_file_index_values(&case_ref, partition).map_err(grpc_status)?;
         let files = rows.iter().map(value_to_file_row).collect();
         Ok(GrpcResponse::new(ListFilesResponse { files }))
     }
@@ -275,8 +274,8 @@ impl OfffAccessService for GrpcAccessService {
         request: Request<GetFileRequest>,
     ) -> Result<GrpcResponse<GetFileResponse>, Status> {
         let req = request.into_inner();
-        let case_path = resolve_case_path(&self.state, &req.case_id).map_err(grpc_status)?;
-        let rows = list_file_index_values(&case_path, None).map_err(grpc_status)?;
+        let case_ref = resolve_case_ref(&self.state, &req.case_id).map_err(grpc_status)?;
+        let rows = list_file_index_values(&case_ref, None).map_err(grpc_status)?;
         let file = rows
             .iter()
             .find(|row| row.get("file_id").and_then(|v| v.as_u64()) == Some(req.file_id))
@@ -290,14 +289,8 @@ impl OfffAccessService for GrpcAccessService {
         request: Request<ListArtifactsRequest>,
     ) -> Result<GrpcResponse<ListArtifactsResponse>, Status> {
         let req = request.into_inner();
-        let case_path = resolve_case_path(&self.state, &req.case_id).map_err(grpc_status)?;
-        let analysis = case_path.join("analysis");
-        if !analysis.exists() {
-            return Ok(GrpcResponse::new(ListArtifactsResponse { paths: Vec::new() }));
-        }
-
-        let mut out = Vec::new();
-        collect_files_relative(&analysis, &case_path, &mut out).map_err(grpc_status)?;
+        let case_ref = resolve_case_ref(&self.state, &req.case_id).map_err(grpc_status)?;
+        let mut out = list_analysis_artifacts(&case_ref).map_err(grpc_status)?;
         out.sort();
         Ok(GrpcResponse::new(ListArtifactsResponse { paths: out }))
     }
@@ -325,7 +318,7 @@ impl OfffAccessService for GrpcAccessService {
             .map_err(grpc_status)?;
 
         let req = request.into_inner();
-        let case_path = resolve_case_path(&self.state, &req.case_id).map_err(grpc_status)?;
+        let case_ref = resolve_case_ref(&self.state, &req.case_id).map_err(grpc_status)?;
 
         let mut rows = Vec::with_capacity(req.rows.len());
         for row in req.rows {
@@ -334,18 +327,18 @@ impl OfffAccessService for GrpcAccessService {
             rows.push(value);
         }
 
-        let target = write_analysis_rows(&case_path, &req.relative_path, &rows).map_err(grpc_status)?;
+        let target = write_analysis_rows(&case_ref, &req.relative_path, &rows).map_err(grpc_status)?;
         tracing::info!(
             action = "grpc_write_analysis_results",
             case_id = %req.case_id,
             tool_id = %actor.tool_id,
             role = ?actor.role,
             outcome = "allow",
-            path = %target.to_string_lossy(),
+            path = %target,
         );
         Ok(GrpcResponse::new(WriteAnalysisResultsResponse {
             ok: true,
-            path: target.to_string_lossy().into_owned(),
+            path: target,
         }))
     }
 
@@ -372,7 +365,7 @@ impl OfffAccessService for GrpcAccessService {
             .map_err(grpc_status)?;
 
         let req = request.into_inner();
-        let case_path = resolve_case_path(&self.state, &req.case_id).map_err(grpc_status)?;
+        let case_ref = resolve_case_ref(&self.state, &req.case_id).map_err(grpc_status)?;
 
         let details = if req.details_json.trim().is_empty() {
             json!({})
@@ -382,7 +375,7 @@ impl OfffAccessService for GrpcAccessService {
         };
 
         let appended = append_provenance(
-            &case_path,
+            &case_ref,
             &req.action,
             &req.actor,
             details,
@@ -412,8 +405,8 @@ async fn get_manifest(
     State(state): State<AppState>,
     AxPath(case_id): AxPath<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let case_path = resolve_case_path(&state, &case_id)?;
-    let value = read_json_file(&case_path.join("manifest.json"))?;
+    let case_ref = resolve_case_ref(&state, &case_id)?;
+    let value = read_json_file(&case_ref, "manifest.json")?;
     Ok(Json(value))
 }
 
@@ -421,10 +414,10 @@ async fn get_chunk(
     State(state): State<AppState>,
     AxPath((case_id, chunk_id)): AxPath<(String, String)>,
 ) -> Result<AxumResponse, ApiError> {
-    let (case_path, manifest, chunks) = load_case_data(&state, &case_id)?;
+    let (case_ref, manifest, chunks) = load_case_data(&state, &case_id)?;
     let _ = manifest;
     let chunk = find_chunk(&chunks, &chunk_id)?;
-    let body = read_chunk(&case_path, chunk).map_err(ApiError::from)?;
+    let body = read_chunk_verified(&case_ref, chunk).map_err(ApiError::from)?;
 
     Ok(([(header::CONTENT_TYPE, "application/octet-stream")], body).into_response())
 }
@@ -433,9 +426,9 @@ async fn verify_chunk_endpoint(
     State(state): State<AppState>,
     AxPath((case_id, chunk_id)): AxPath<(String, String)>,
 ) -> Result<Json<VerifyChunkResponse>, ApiError> {
-    let (case_path, _, chunks) = load_case_data(&state, &case_id)?;
+    let (case_ref, _, chunks) = load_case_data(&state, &case_id)?;
     let chunk = find_chunk(&chunks, &chunk_id)?;
-    verify_chunk(&case_path, chunk).map_err(ApiError::from)?;
+    read_chunk_verified(&case_ref, chunk).map_err(ApiError::from)?;
     Ok(Json(VerifyChunkResponse { ok: true }))
 }
 
@@ -444,8 +437,8 @@ async fn list_files(
     AxPath(case_id): AxPath<String>,
     Query(query): Query<FilesQuery>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    let case_path = resolve_case_path(&state, &case_id)?;
-    let rows = list_file_index_values(&case_path, query.partition_id.as_deref())?;
+    let case_ref = resolve_case_ref(&state, &case_id)?;
+    let rows = list_file_index_values(&case_ref, query.partition_id.as_deref())?;
 
     Ok(Json(rows))
 }
@@ -454,8 +447,8 @@ async fn get_file(
     State(state): State<AppState>,
     AxPath((case_id, file_id)): AxPath<(String, u64)>,
 ) -> Result<Json<Value>, ApiError> {
-    let case_path = resolve_case_path(&state, &case_id)?;
-    let rows = list_file_index_values(&case_path, None)?;
+    let case_ref = resolve_case_ref(&state, &case_id)?;
+    let rows = list_file_index_values(&case_ref, None)?;
     for row in rows {
         if row.get("file_id").and_then(|v| v.as_u64()) == Some(file_id) {
             return Ok(Json(row));
@@ -469,14 +462,8 @@ async fn list_artifacts(
     State(state): State<AppState>,
     AxPath(case_id): AxPath<String>,
 ) -> Result<Json<Vec<String>>, ApiError> {
-    let case_path = resolve_case_path(&state, &case_id)?;
-    let analysis = case_path.join("analysis");
-    if !analysis.exists() {
-        return Ok(Json(Vec::new()));
-    }
-
-    let mut out = Vec::new();
-    collect_files_relative(&analysis, &case_path, &mut out)?;
+    let case_ref = resolve_case_ref(&state, &case_id)?;
+    let mut out = list_analysis_artifacts(&case_ref)?;
     out.sort();
     Ok(Json(out))
 }
@@ -501,8 +488,8 @@ async fn write_analysis_results(
     }
     enforce_tool_registry(&state, &actor, WriteLayer::Analysis)?;
 
-    let case_path = resolve_case_path(&state, &case_id)?;
-    let target = write_analysis_rows(&case_path, &payload.relative_path, &payload.rows)?;
+    let case_ref = resolve_case_ref(&state, &case_id)?;
+    let target = write_analysis_rows(&case_ref, &payload.relative_path, &payload.rows)?;
 
     tracing::info!(
         action = "write_analysis_results",
@@ -510,12 +497,12 @@ async fn write_analysis_results(
         tool_id = %actor.tool_id,
         role = ?actor.role,
         outcome = "allow",
-        path = %target.to_string_lossy(),
+        path = %target,
     );
 
     Ok(Json(WriteResultResponse {
         ok: true,
-        path: target.to_string_lossy().into_owned(),
+        path: target,
     }))
 }
 
@@ -539,9 +526,9 @@ async fn append_provenance_event(
     }
     enforce_tool_registry(&state, &actor, WriteLayer::Provenance)?;
 
-    let case_path = resolve_case_path(&state, &case_id)?;
+    let case_ref = resolve_case_ref(&state, &case_id)?;
     let appended = append_provenance(
-        &case_path,
+        &case_ref,
         &payload.action,
         &payload.actor,
         payload.details,
@@ -565,28 +552,21 @@ async fn append_provenance_event(
     }))
 }
 
-fn list_file_index_values(case_path: &Path, partition_id: Option<&str>) -> Result<Vec<Value>, ApiError> {
+fn list_file_index_values(case_ref: &ContainerRef, partition_id: Option<&str>) -> Result<Vec<Value>, ApiError> {
     let mut rows = Vec::new();
 
     if let Some(partition_id) = partition_id {
-        let p = case_path
-            .join("indexes")
-            .join("filesystems")
-            .join(partition_id)
-            .join("file_index.parquet");
-        rows.extend(read_file_index_rows(&p)?);
+        let rel = format!("indexes/filesystems/{partition_id}/file_index.parquet");
+        if case_ref.exists(&rel).map_err(ApiError::from)? {
+            rows.extend(read_file_index_rows(case_ref, &rel)?);
+        }
     } else {
-        let root = case_path.join("indexes").join("filesystems");
-        if root.exists() {
-            for entry in fs::read_dir(&root)? {
-                let entry = entry?;
-                if !entry.file_type()?.is_dir() {
-                    continue;
-                }
-                let p = entry.path().join("file_index.parquet");
-                if p.exists() {
-                    rows.extend(read_file_index_rows(&p)?);
-                }
+        for rel in case_ref
+            .list_relative_keys("indexes/filesystems/")
+            .map_err(ApiError::from)?
+        {
+            if rel.ends_with("/file_index.parquet") {
+                rows.extend(read_file_index_rows(case_ref, &rel)?);
             }
         }
     }
@@ -594,7 +574,7 @@ fn list_file_index_values(case_path: &Path, partition_id: Option<&str>) -> Resul
     Ok(rows)
 }
 
-fn write_analysis_rows(case_path: &Path, relative_path: &str, rows: &[Value]) -> Result<PathBuf, ApiError> {
+fn write_analysis_rows(case_ref: &ContainerRef, relative_path: &str, rows: &[Value]) -> Result<String, ApiError> {
     let rel = normalize_rel_path(relative_path)?;
     if !rel.starts_with("analysis/") {
         return Err(ApiError::bad_request("relative_path must start with analysis/"));
@@ -607,26 +587,13 @@ fn write_analysis_rows(case_path: &Path, relative_path: &str, rows: &[Value]) ->
         return Err(ApiError::forbidden("write target outside analysis layer is not allowed"));
     }
 
-    let target = case_path.join(rel);
-    if let Some(parent) = target.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    use std::io::Write as _;
-    let mut file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&target)
-        .map_err(ApiError::from)?;
-
     for row in rows {
-        file.write_all(serde_json::to_string(row)?.as_bytes())
+        case_ref
+            .append_jsonl_line(&rel, &serde_json::to_string(row)?)
             .map_err(ApiError::from)?;
-        file.write_all(b"\n").map_err(ApiError::from)?;
     }
-    file.flush().map_err(ApiError::from)?;
 
-    Ok(target)
+    Ok(rel)
 }
 
 fn actor_from_headers(headers: &HeaderMap) -> Result<ActorContext, ApiError> {
@@ -684,7 +651,7 @@ fn enforce_tool_registry(
     actor: &ActorContext,
     layer: WriteLayer,
 ) -> Result<(), ApiError> {
-    let registry = load_tool_registry(&state.tool_registry_path)?;
+    let registry = load_tool_registry(Path::new(&state.tool_registry_path))?;
     let rec = registry
         .tools
         .iter()
@@ -750,40 +717,49 @@ struct AppendedProvenance {
 }
 
 fn append_provenance(
-    case_path: &Path,
+    case_ref: &ContainerRef,
     action: &str,
     actor: &str,
     details: Value,
     tool_name: Option<String>,
     tool_version: Option<String>,
 ) -> Result<AppendedProvenance, ApiError> {
-    let path = case_path.join("provenance").join("chain_of_custody.jsonl");
-    let mut writer = ProvenanceWriter::new(&path)?;
-
     let tool_name = tool_name
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| "offf-access-service".to_string());
     let tool_version = tool_version
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| "0.1.0".to_string());
-
-    writer.record(action, &tool_name, &tool_version, actor, details)?;
-
-    let content = fs::read_to_string(&path)?;
-    let last = content
+    let rel = "provenance/chain_of_custody.jsonl";
+    let counter = case_ref
+        .read_text(rel)
+        .unwrap_or_default()
         .lines()
         .filter(|l| !l.trim().is_empty())
-        .next_back()
-        .ok_or_else(|| ApiError::internal("failed to read appended provenance event"))?;
-    let obj: Value = serde_json::from_str(last)?;
+        .count();
+
+    let event = serde_json::json!({
+        "event_id": format!("evt-{counter:06}"),
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+        "actor": actor,
+        "action": action,
+        "tool": ToolInfo {
+            name: tool_name,
+            version: tool_version,
+        },
+        "details": details,
+    });
+    case_ref
+        .append_jsonl_line(rel, &serde_json::to_string(&event)?)
+        .map_err(ApiError::from)?;
 
     Ok(AppendedProvenance {
-        event_id: obj
+        event_id: event
             .get("event_id")
             .and_then(|v| v.as_str())
             .unwrap_or_default()
             .to_string(),
-        timestamp: obj
+        timestamp: event
             .get("timestamp")
             .and_then(|v| v.as_str())
             .unwrap_or_default()
@@ -825,35 +801,53 @@ fn grpc_status(err: ApiError) -> Status {
     Status::new(code, err.message)
 }
 
-fn resolve_case_path(state: &AppState, case_id: &str) -> Result<PathBuf, ApiError> {
-    let direct = state.cases_root.join(case_id);
-    if direct.exists() {
-        return Ok(direct);
+fn resolve_case_ref(state: &AppState, case_id: &str) -> Result<ContainerRef, ApiError> {
+    if case_id.starts_with("s3://") {
+        let case_ref = ContainerRef::parse(case_id).map_err(ApiError::from)?;
+        if case_ref.exists("manifest.json").map_err(ApiError::from)? {
+            return Ok(case_ref);
+        }
+        return Err(ApiError::not_found(format!("case not found: {case_id}")));
     }
-    let with_ext = state.cases_root.join(format!("{case_id}.offf"));
-    if with_ext.exists() {
-        return Ok(with_ext);
+
+    if state.cases_root.starts_with("s3://") {
+        let root = state.cases_root.trim_end_matches('/');
+        for candidate in [format!("{root}/{case_id}"), format!("{root}/{case_id}.offf")] {
+            let case_ref = ContainerRef::parse(&candidate).map_err(ApiError::from)?;
+            if case_ref.exists("manifest.json").map_err(ApiError::from)? {
+                return Ok(case_ref);
+            }
+        }
+        return Err(ApiError::not_found(format!("case not found: {case_id}")));
+    }
+
+    for candidate in [
+        std::path::PathBuf::from(&state.cases_root).join(case_id),
+        std::path::PathBuf::from(&state.cases_root).join(format!("{case_id}.offf")),
+    ] {
+        if candidate.exists() {
+            return Ok(ContainerRef::Local(candidate));
+        }
     }
     Err(ApiError::not_found(format!("case not found: {case_id}")))
 }
 
-fn load_case_data(state: &AppState, case_id: &str) -> Result<(PathBuf, ManifestJson, Vec<ChunkMetadata>), ApiError> {
-    let case_path = resolve_case_path(state, case_id)?;
-    let manifest_value = read_json_file(&case_path.join("manifest.json"))?;
+fn load_case_data(
+    state: &AppState,
+    case_id: &str,
+) -> Result<(ContainerRef, ManifestJson, Vec<ChunkMetadata>), ApiError> {
+    let case_ref = resolve_case_ref(state, case_id)?;
+    let manifest_value = read_json_file(&case_ref, "manifest.json")?;
     let manifest: ManifestJson = serde_json::from_value(manifest_value)?;
-    let map_path = case_path.join(&manifest.indexes.physical_to_chunk);
-    let chunks = read_physical_to_chunk(&map_path)?;
-    Ok((case_path, manifest, chunks))
+    let map_data = case_ref
+        .read_bytes(&manifest.indexes.physical_to_chunk)
+        .map_err(ApiError::from)?;
+    let chunks = read_physical_to_chunk_bytes(&map_data).map_err(ApiError::from)?;
+    Ok((case_ref, manifest, chunks))
 }
 
-fn read_json_file(path: &Path) -> Result<Value, ApiError> {
-    let raw = fs::read_to_string(path).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            ApiError::not_found(format!("missing file: {}", path.to_string_lossy()))
-        } else {
-            ApiError::from(e)
-        }
-    })?;
+fn read_json_file(case_ref: &ContainerRef, rel: &str) -> Result<Value, ApiError> {
+    let raw = case_ref.read_text(rel).map_err(ApiError::from)?;
     let value: Value = serde_json::from_str(&raw)?;
     Ok(value)
 }
@@ -873,27 +867,9 @@ fn normalize_rel_path(path: &str) -> Result<String, ApiError> {
     Ok(rel)
 }
 
-fn collect_files_relative(dir: &Path, base: &Path, out: &mut Vec<String>) -> Result<(), ApiError> {
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if entry.file_type()?.is_dir() {
-            collect_files_relative(&path, base, out)?;
-        } else {
-            let rel = path
-                .strip_prefix(base)
-                .map_err(|_| ApiError::internal("failed to relativize artifact path"))?
-                .to_string_lossy()
-                .replace('\\', "/");
-            out.push(rel);
-        }
-    }
-    Ok(())
-}
-
-fn read_file_index_rows(path: &Path) -> Result<Vec<Value>, ApiError> {
-    let file = fs::File::open(path).map_err(ApiError::from)?;
-    let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+fn read_file_index_rows(case_ref: &ContainerRef, rel: &str) -> Result<Vec<Value>, ApiError> {
+    let data = case_ref.read_bytes(rel).map_err(ApiError::from)?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(data))?;
     let reader = builder.build()?;
 
     let mut out = Vec::new();
@@ -901,6 +877,14 @@ fn read_file_index_rows(path: &Path) -> Result<Vec<Value>, ApiError> {
         let batch = batch?;
         out.extend(batch_to_json_rows(&batch)?);
     }
+    Ok(out)
+}
+
+fn list_analysis_artifacts(case_ref: &ContainerRef) -> Result<Vec<String>, ApiError> {
+    let mut out = case_ref
+        .list_relative_keys("analysis/")
+        .map_err(ApiError::from)?;
+    out.sort();
     Ok(out)
 }
 

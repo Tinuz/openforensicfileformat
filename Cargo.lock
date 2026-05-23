@@ -2997,6 +2997,7 @@ dependencies = [
  "anyhow",
  "arrow",
  "axum 0.8.9",
+ "bytes",
  "chrono",
  "offf-core",
  "parquet",
