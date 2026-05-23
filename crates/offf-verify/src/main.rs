@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 
 use offf_core::{
     chunk::verify_chunk,
-    hash::{deserialize_merkle_root, merkle_root},
+    hash::{generate_merkle_proof, parse_and_validate_merkle_tree, verify_merkle_proof},
     parquet_io::{read_physical_to_chunk, read_physical_to_chunk_bytes},
     storage::{read_chunk_verified, ContainerRef},
     types::{ManifestJson, OFFF_VERSION},
@@ -31,6 +31,13 @@ struct Args {
     ///   --chunks sha256:abc...,sha256:def...
     #[arg(long)]
     chunks: Option<String>,
+
+    /// Optional proof helper: generate and verify proof for a chunk sequence or chunk_id.
+    /// Examples:
+    ///   --proof-chunk 12
+    ///   --proof-chunk sha256:abc...
+    #[arg(long)]
+    proof_chunk: Option<String>,
 }
 
 // ── Verification result ───────────────────────────────────────────────────────
@@ -112,14 +119,14 @@ impl VerifyReport {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let valid = verify(&args.container, args.chunks.as_deref())?;
+    let valid = verify(&args.container, args.chunks.as_deref(), args.proof_chunk.as_deref())?;
     if !valid {
         std::process::exit(1);
     }
     Ok(())
 }
 
-fn verify(container_arg: &str, subset_arg: Option<&str>) -> Result<bool> {
+fn verify(container_arg: &str, subset_arg: Option<&str>, proof_chunk_arg: Option<&str>) -> Result<bool> {
     let container = ContainerRef::parse(container_arg)?;
     let mut report = VerifyReport {
         container: container.display(),
@@ -244,7 +251,7 @@ fn verify(container_arg: &str, subset_arg: Option<&str>) -> Result<bool> {
         );
     }
 
-    // ── Check 7: Merkle root ───────────────────────────────────────────────
+    // ── Check 7: Merkle tree structure + root consistency ─────────────────
     let is_subset = subset_arg.is_some();
     if is_subset {
         report.warn(
@@ -252,57 +259,95 @@ fn verify(container_arg: &str, subset_arg: Option<&str>) -> Result<bool> {
             "skipped in subset mode (requires full leaf set)",
         );
     } else {
-        let merkle_valid = match container.read_bytes("hashes/merkle_tree.bin") {
-            Ok(blob) => match deserialize_merkle_root(&blob) {
-                Ok(stored_root) => {
-                    let leaf_hashes: Vec<String> =
-                        chunks.iter().map(|c| c.plaintext_sha256.clone()).collect();
-                    match merkle_root(&leaf_hashes) {
-                        Ok(computed) => {
-                            if computed == stored_root
-                                && stored_root == manifest.hashes.merkle_root_sha256
-                            {
-                                report.ok(format!("Merkle root: {}", &stored_root[..16]));
-                                true
-                            } else if stored_root != manifest.hashes.merkle_root_sha256 {
-                                report.fail(
-                                    "Merkle root",
-                                    format!(
-                                        "bin file root ({}) differs from manifest ({})",
-                                        &stored_root[..16],
-                                        &manifest.hashes.merkle_root_sha256[..16]
-                                    ),
-                                );
-                                false
-                            } else {
-                                report.fail(
-                                    "Merkle root",
-                                    format!(
-                                        "recomputed ({}) differs from stored ({})",
-                                        &computed[..16],
-                                        &stored_root[..16]
-                                    ),
-                                );
-                                false
-                            }
-                        }
-                        Err(e) => {
-                            report.fail("Merkle root recomputation", e.to_string());
-                            false
-                        }
+        match container.read_bytes("hashes/merkle_tree.bin") {
+            Ok(blob) => match parse_and_validate_merkle_tree(&blob) {
+                Ok(tree) => {
+                    let map_leaves: Vec<String> = chunks
+                        .iter()
+                        .map(|c| c.plaintext_sha256.clone())
+                        .collect();
+
+                    if tree.leaf_count as usize != map_leaves.len() {
+                        report.fail(
+                            "Merkle leaf count",
+                            format!(
+                                "tree leaf_count={} differs from map chunk_count={}",
+                                tree.leaf_count,
+                                map_leaves.len()
+                            ),
+                        );
+                    } else {
+                        report.ok(format!("Merkle leaf count: {}", tree.leaf_count));
+                    }
+
+                    if tree.leaves != map_leaves {
+                        report.fail(
+                            "Merkle leaves order/content",
+                            "tree leaves differ from physical_to_chunk plaintext hashes",
+                        );
+                    } else {
+                        report.ok("Merkle leaves match physical_to_chunk order");
+                    }
+
+                    if tree.root == manifest.hashes.merkle_root_sha256 {
+                        report.ok(format!("Merkle root: {}", &tree.root[..16]));
+                    } else {
+                        report.fail(
+                            "Merkle root",
+                            format!(
+                                "tree root ({}) differs from manifest ({})",
+                                &tree.root[..16],
+                                &manifest.hashes.merkle_root_sha256[..16]
+                            ),
+                        );
                     }
                 }
-                Err(e) => {
-                    report.fail("Merkle tree binary", e.to_string());
-                    false
-                }
+                Err(e) => report.fail("Merkle tree binary", e.to_string()),
             },
-            Err(_) => {
-                report.fail("Merkle tree binary", "hashes/merkle_tree.bin not found");
-                false
+            Err(_) => report.fail("Merkle tree binary", "hashes/merkle_tree.bin not found"),
+        }
+
+        // Optional proof helper using full leaf set from map order.
+        if let Some(proof_chunk_ref) = proof_chunk_arg {
+            match resolve_chunk_ref(proof_chunk_ref, &chunks) {
+                Some(chunk) => {
+                    let leaves: Vec<String> = chunks
+                        .iter()
+                        .map(|c| c.plaintext_sha256.clone())
+                        .collect();
+                    match generate_merkle_proof(&leaves, chunk.sequence) {
+                        Ok(proof) => {
+                            match verify_merkle_proof(
+                                &chunk.plaintext_sha256,
+                                chunk.sequence,
+                                &proof,
+                                &manifest.hashes.merkle_root_sha256,
+                            ) {
+                                Ok(true) => {
+                                    report.ok(format!(
+                                        "Merkle proof verified for chunk {}",
+                                        chunk.sequence
+                                    ));
+                                    if let Ok(json) = serde_json::to_string_pretty(&proof) {
+                                        println!("\nMerkle proof:\n{json}\n");
+                                    }
+                                }
+                                Ok(false) => report.fail(
+                                    "Merkle proof verification",
+                                    format!("proof verification failed for chunk {}", chunk.sequence),
+                                ),
+                                Err(e) => report.fail("Merkle proof verification", e.to_string()),
+                            }
+                        }
+                        Err(e) => report.fail("Merkle proof generation", e.to_string()),
+                    }
+                }
+                None => report.fail(
+                    "Merkle proof chunk selection",
+                    format!("chunk not found for reference: {proof_chunk_ref}"),
+                ),
             }
-        };
-        let _ = merkle_valid;
+        }
     }
 
     // ── Check 8: Source hash (stream all chunks in order) ─────────────────
@@ -400,4 +445,15 @@ fn parse_subset(arg: Option<&str>) -> Option<(HashSet<String>, HashSet<u64>)> {
         }
     }
     Some((ids, seqs))
+}
+
+fn resolve_chunk_ref<'a>(chunk_ref: &str, chunks: &'a [offf_core::types::ChunkMetadata]) -> Option<&'a offf_core::types::ChunkMetadata> {
+    if chunk_ref.starts_with("sha256:") {
+        chunks.iter().find(|c| c.chunk_id == chunk_ref)
+    } else {
+        chunk_ref
+            .parse::<u64>()
+            .ok()
+            .and_then(|seq| chunks.iter().find(|c| c.sequence == seq))
+    }
 }
