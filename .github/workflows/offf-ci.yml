@@ -1,0 +1,90 @@
+name: OFFF CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  rust-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo check workspace
+        run: cargo check --workspace
+
+      - name: Run core tests
+        run: cargo test -p offf-core -- --nocapture
+
+      - name: Run gRPC smoke test
+        run: cargo test -p offf-access-service --test grpc_smoke -- --nocapture
+
+  python-sdk-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run SDK API contract test
+        working-directory: sdk/python
+        run: python -m unittest tests/test_api_contract.py -v
+
+  schema-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate schema JSON files
+        run: |
+          python - << 'PY'
+          import json
+          from pathlib import Path
+
+          roots = [
+              Path('docs/schema'),
+              Path('sdk/python/offf_sdk/schemas'),
+          ]
+
+          files = []
+          for root in roots:
+              if root.exists():
+                  files.extend(sorted(root.glob('*.json')))
+
+          if not files:
+              raise SystemExit('No schema JSON files found')
+
+          for path in files:
+              json.loads(path.read_text(encoding='utf-8'))
+              print(f'OK {path}')
+          PY
+
+  conformance-scaffold:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run conformance scaffold
+        run: python tests/conformance/run_conformance.py

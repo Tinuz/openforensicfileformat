@@ -1,0 +1,4 @@
+rule always_true {
+    condition:
+        true
+}

@@ -1,0 +1,19 @@
+[package]
+name = "offf-yara-worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "offf-yara-worker"
+path = "src/main.rs"
+
+[dependencies]
+offf-core = { path = "../offf-core" }
+clap = { workspace = true }
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+yara-x = { workspace = true }
+tempfile = { workspace = true }

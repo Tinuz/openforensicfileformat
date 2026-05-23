@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://offf.dev/schema/offf-annotation-event-0.1.0.schema.json",
+  "title": "OFFF Annotation Event v0.1.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["annotation_id", "timestamp", "actor", "origin", "annotation_type", "target"],
+  "properties": {
+    "annotation_id": { "type": "string", "minLength": 1 },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "actor": { "type": "string", "minLength": 1 },
+    "origin": { "type": "string", "enum": ["human", "ai"] },
+    "annotation_type": { "type": "string", "minLength": 1 },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "file_id": { "type": "string" },
+        "chunk_id": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "artifact_id": { "type": "string" }
+      },
+      "anyOf": [
+        { "required": ["file_id"] },
+        { "required": ["chunk_id"] },
+        { "required": ["artifact_id"] }
+      ]
+    },
+    "label": { "type": "string" },
+    "comment": { "type": "string" },
+    "classification": { "type": "string" },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "input_scope": { "type": "string" },
+    "model_name": { "type": "string" },
+    "model_version": { "type": "string" },
+    "model_hash": { "type": "string" },
+    "correction_of": { "type": "string" }
+  }
+}

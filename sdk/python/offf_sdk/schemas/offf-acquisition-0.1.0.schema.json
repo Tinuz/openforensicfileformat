@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://offf.dev/schema/offf-acquisition-0.1.0.schema.json",
+  "title": "OFFF Acquisition v0.1.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "container_id",
+    "acquired_at",
+    "tool",
+    "source",
+    "parameters"
+  ],
+  "properties": {
+    "container_id": {
+      "type": "string",
+      "pattern": "^urn:offf:case:.+$"
+    },
+    "acquired_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "tool": {
+      "$ref": "#/$defs/toolInfo"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "size_bytes", "sha256"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256Hex"
+        }
+      }
+    },
+    "source_container": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "container_sha256", "tool_used", "conversion_time"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["E01"]
+        },
+        "container_sha256": {
+          "$ref": "#/$defs/sha256Hex"
+        },
+        "tool_used": {
+          "type": "string",
+          "minLength": 1
+        },
+        "conversion_time": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "evidence_stream": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stream_sha256"],
+      "properties": {
+        "stream_sha256": {
+          "$ref": "#/$defs/sha256Hex"
+        }
+      }
+    },
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["chunk_size", "compression", "hash_algorithm", "deterministic"],
+      "properties": {
+        "chunk_size": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "compression": {
+          "type": "string",
+          "enum": ["none", "zstd"]
+        },
+        "hash_algorithm": {
+          "type": "string",
+          "enum": ["sha256"]
+        },
+        "deterministic": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256Hex": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "toolInfo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

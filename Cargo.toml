@@ -1,0 +1,61 @@
+[workspace]
+members = [
+    "crates/offf-core",
+    "crates/offf-access-service",
+    "crates/offf-convert",
+    "crates/offf-verify",
+    "crates/offf-export",
+    "crates/offf-index",
+    "crates/offf-jobs",
+    "crates/offf-keyword-worker",
+    "crates/offf-yara-worker",
+    "crates/offf-annotate",
+    "tests/integration",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/offf/offf"
+
+[workspace.dependencies]
+# Hashing
+sha2 = "0.10"
+
+# Compression
+zstd = "0.13"
+
+# Serialisation
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Parquet / Arrow
+arrow = { version = "54", default-features = false, features = ["csv"] }
+parquet = { version = "54", default-features = false, features = ["arrow"] }
+
+# Identifiers & time
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+hex = "0.4"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Parallelism
+rayon = "1"
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# YARA-X (pure-Rust YARA engine)
+yara-x = "0.12"
+
+# Testing
+tempfile = "3"
+
+[profile.release]
+lto = true
+codegen-units = 1

@@ -1,0 +1,28 @@
+[package]
+name = "offf-access-service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+offf-core = { path = "../offf-core" }
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+parquet.workspace = true
+arrow.workspace = true
+chrono.workspace = true
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+axum = { version = "0.8", features = ["json", "http1"] }
+tower-http = { version = "0.6", features = ["trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tonic = { version = "0.12", features = ["transport"] }
+prost = "0.13"
+
+[build-dependencies]
+tonic-build = "0.12"
+protoc-bin-vendored = "3"
+
+[dev-dependencies]
+tempfile.workspace = true

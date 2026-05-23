@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "offf-sdk"
+version = "0.1.0"
+description = "Python SDK for OFFF containers"
+requires-python = ">=3.10"
+authors = [{ name = "OFFF" }]
+license = { text = "MIT OR Apache-2.0" }
+dependencies = [
+    "pyarrow>=14",
+    "zstandard>=0.22",
+    "jsonschema>=4",
+]
+
+[tool.setuptools]
+package-dir = {"" = "."}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["offf_sdk*"]
+
+[tool.setuptools.package-data]
+offf_sdk = ["schemas/*.json"]

@@ -1,0 +1,15 @@
+[package]
+name = "offf-integration-tests"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+offf-core = { path = "../../crates/offf-core" }
+tempfile.workspace = true
+sha2.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+serde = { workspace = true }
+

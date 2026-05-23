@@ -1,0 +1,20 @@
+[package]
+name = "offf-jobs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "offf-jobs"
+path = "src/main.rs"
+
+[dependencies]
+offf-core = { path = "../offf-core" }
+clap = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }

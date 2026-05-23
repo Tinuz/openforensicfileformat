@@ -1,0 +1,29 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local runtime artifacts
+tests/conformance/conformance-report.json
+jobs/runtime/
+tests/samples/4orensics.case2.7z
+tests/samples/4orensics.case2/4orensics.001
+tests/samples/4orensics.case2.offf/
+
+# Logs and temp
+*.log
+*.tmp
+*.swp

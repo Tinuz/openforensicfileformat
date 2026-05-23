@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://offf.dev/schema/offf-partition-table-0.1.0.schema.json",
+  "title": "OFFF Partition Table v0.1.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "generated_at",
+    "generated_by_tool",
+    "container_id",
+    "sector_size",
+    "partition_table_type",
+    "partitions"
+  ],
+  "properties": {
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "generated_by_tool": {
+      "$ref": "#/$defs/toolInfo"
+    },
+    "container_id": {
+      "type": "string",
+      "pattern": "^urn:offf:case:.+$"
+    },
+    "sector_size": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "partition_table_type": {
+      "type": "string",
+      "enum": ["mbr", "gpt", "volume_image"]
+    },
+    "disk_guid": {
+      "type": "string"
+    },
+    "partitions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/partitionEntry"
+      }
+    }
+  },
+  "$defs": {
+    "toolInfo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "partitionEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "partition_id",
+        "partition_type",
+        "start_offset",
+        "length",
+        "first_lba",
+        "last_lba",
+        "chunk_refs"
+      ],
+      "properties": {
+        "partition_id": { "type": "string" },
+        "name": { "type": "string" },
+        "partition_type": { "type": "string" },
+        "type_guid": { "type": "string" },
+        "unique_guid": { "type": "string" },
+        "start_offset": { "type": "integer", "minimum": 0 },
+        "length": { "type": "integer", "minimum": 0 },
+        "first_lba": { "type": "integer", "minimum": 0 },
+        "last_lba": { "type": "integer", "minimum": 0 },
+        "attributes": { "type": "integer", "minimum": 0 },
+        "bootable": { "type": "boolean" },
+        "chunk_refs": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+        },
+        "filesystem_type": { "type": "string" }
+      }
+    }
+  }
+}

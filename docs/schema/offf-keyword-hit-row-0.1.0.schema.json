@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://offf.dev/schema/offf-keyword-hit-row-0.1.0.schema.json",
+  "title": "OFFF Keyword Hit Row v0.1.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "hit_id",
+    "job_id",
+    "keyword",
+    "chunk_id",
+    "physical_offset",
+    "file_id",
+    "context_before",
+    "context_after",
+    "encoding",
+    "worker_id",
+    "timestamp"
+  ],
+  "properties": {
+    "hit_id": { "type": "string" },
+    "job_id": { "type": "string" },
+    "keyword": { "type": "string" },
+    "chunk_id": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "physical_offset": { "type": "integer", "minimum": 0 },
+    "file_id": { "type": "string" },
+    "context_before": { "type": "string" },
+    "context_after": { "type": "string" },
+    "encoding": { "type": "string", "enum": ["utf-8", "utf-16le"] },
+    "worker_id": { "type": "string" },
+    "timestamp": { "type": "string", "format": "date-time" }
+  }
+}

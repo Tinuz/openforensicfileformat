@@ -1,0 +1,130 @@
+OFFF Backlog
+============
+
+- [x] Phase 5: MinIO end-to-end smoke test
+  - Validate `offf-verify` against s3:// URI on MinIO
+  - Validate `offf-keyword-worker` and `offf-yara-worker` against remote container
+  - Validate remote provenance append behavior under concurrent worker writes
+  - Owner: next implementation cycle
+  - Added: 2026-05-22
+  - Status: done
+  - Done: 2026-05-23
+  - Progress: `tests/smoke/phase5_minio_smoke.py` valideert `offf-verify` tegen `s3://` op MinIO, draait `offf-keyword-worker` + `offf-yara-worker` tegen remote container, en controleert concurrente provenance appends
+
+- [x] Phase 7: E01 smoke test + ewfexport installatie
+  - Install libewf tools and ensure `ewfexport` is available in PATH
+  - Verify with `Get-Command ewfexport` that command resolution succeeds
+  - Convert a real `.E01` sample with `offf-convert --input-type e01`
+  - Confirm `acquisition.json` contains:
+    - `source_container.type = E01`
+    - `source_container.container_sha256`
+    - `source_container.tool_used = ewfexport`
+    - `evidence_stream.stream_sha256`
+  - Run `offf-verify` on the generated OFFF container and expect VALID
+  - Owner: next implementation cycle
+  - Added: 2026-05-22
+  - Status: done
+  - Done: 2026-05-23
+  - Progress: `tests/smoke/phase7_e01_smoke.py` genereert een `.E01`, converteert met `offf-convert --input-type e01`, valideert `acquisition.json` velden en verifieert de output met `offf-verify`
+
+- [x] SDK: contract-test voor minimale Python API + CI guard
+  - Add `sdk/python/tests/test_api_contract.py`
+  - Assert presence of required API names:
+    - `open_container`
+    - `read_manifest`
+    - `verify_container`
+    - `read_chunk`
+    - `verify_chunk`
+    - `map_offset_to_chunk`
+    - `read_file_index`
+    - `write_analysis_result`
+    - `append_provenance_event`
+  - Add CI step to run this contract-test on every PR
+  - Owner: next implementation cycle
+  - Added: 2026-05-22
+  - Done: 2026-05-22
+
+- [x] Access Service: gRPC smoke test + CI gate (P0)
+  - Add an end-to-end smoke test for gRPC methods in `offf-access-service`:
+    - `GetManifest`
+    - `GetChunk`
+    - `VerifyChunk`
+    - `ListFiles`
+    - `GetFile`
+    - `ListArtifacts`
+    - `WriteAnalysisResults`
+    - `AppendProvenanceEvent`
+  - Use `tests/samples/4orensics.case2.offf` as baseline case data
+  - Add CI step so the smoke test is mandatory on PRs
+  - Owner: next implementation cycle
+  - Added: 2026-05-22
+  - Done: 2026-05-22
+
+- [x] Access Service: capability model enforcement (P0)
+  - Implement authn/authz and role-based write restrictions
+  - Enforce layer policy:
+    - evidence immutable
+    - analysis append-only
+    - provenance append-only
+    - index writes only by approved profile
+  - Add audit logging for denied/allowed writes
+  - Owner: next implementation cycle
+  - Added: 2026-05-22
+  - Done: 2026-05-22
+
+- [ ] Access Service: storage backends parity (P0)
+  - Extend case resolution beyond local filesystem
+  - Add S3/MinIO/Ceph object-store support in access-service read/write flows
+  - Add parity tests local vs s3:// case paths
+  - Owner: next implementation cycle
+  - Added: 2026-05-22
+  - Status: ready in current environment (lokale MinIO/S3 test-endpoint geconfigureerd)
+
+- [x] Conformance suite + integration profiles (P0)
+  - Create official PASS/FAIL conformance suite for:
+    - Reader profile
+    - Analysis profile
+    - Indexer profile
+    - Acquisition profile
+  - Include negative datasets (corrupt chunk, missing chunk, invalid provenance, bad offsets)
+  - Publish machine-readable result report format
+  - Owner: next implementation cycle
+  - Added: 2026-05-22
+  - Done: 2026-05-22
+  - Progress: `tests/conformance/run_conformance.py` now evaluates reader/analysis/indexer/acquisition + negative scenarios
+
+- [x] CI baseline voor OFFF ecosysteem (P0)
+  - Add repository CI workflows under `.github/workflows/`
+  - Minimum required jobs:
+    - rust build/test for core crates
+    - access-service REST + gRPC smoke tests
+    - Python SDK contract test
+    - schema validation checks
+  - Owner: next implementation cycle
+  - Added: 2026-05-22
+    - Done: 2026-05-22
+
+- [ ] Go SDK minimal profile implementation (P1)
+  - Create `sdk/go` with API parity for minimum OFFF SDK surface
+  - Include container open/read/verify + analysis/provenance append APIs
+  - Add smoke tests against sample OFFF container
+  - Owner: next implementation cycle
+  - Added: 2026-05-22
+  - Status: ready in current environment (`go` beschikbaar, versie 1.26.3)
+
+- [x] Tool registry + governance artifacts (P1)
+  - Define schema and storage for approved tool registry
+  - Track tool identity, vendor, executable/image hash, allowed profile, OFFF version support
+  - Integrate registry checks in Access Service write paths
+  - Owner: next implementation cycle
+  - Added: 2026-05-22
+  - Done: 2026-05-22
+
+- [x] Worker framework hardening (P1)
+  - Add deterministic job replay support
+  - Add retry/failure policy with bounded retries and terminal states
+  - Add worker health registry and assignment audit trail
+  - Owner: next implementation cycle
+  - Added: 2026-05-22
+  - Done: 2026-05-22
+  - Progress: `offf-jobs run` now writes runtime state + replay id in `jobs/runtime/*.state.json`, assignment audit in `jobs/runtime/assignment_audit.jsonl`, and worker health in `jobs/runtime/worker_health.jsonl`

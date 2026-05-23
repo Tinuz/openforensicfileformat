@@ -1,0 +1,85 @@
+syntax = "proto3";
+
+package offf.access.v1;
+
+service OfffAccessService {
+  rpc GetManifest(GetManifestRequest) returns (GetManifestResponse);
+  rpc GetChunk(GetChunkRequest) returns (GetChunkResponse);
+  rpc VerifyChunk(VerifyChunkRequest) returns (VerifyChunkResponse);
+  rpc ListFiles(ListFilesRequest) returns (ListFilesResponse);
+  rpc GetFile(GetFileRequest) returns (GetFileResponse);
+  rpc ListArtifacts(ListArtifactsRequest) returns (ListArtifactsResponse);
+  rpc WriteAnalysisResults(WriteAnalysisResultsRequest) returns (WriteAnalysisResultsResponse);
+  rpc AppendProvenanceEvent(AppendProvenanceEventRequest) returns (AppendProvenanceEventResponse);
+}
+
+message GetManifestRequest { string case_id = 1; }
+message GetManifestResponse { string manifest_json = 1; }
+
+message GetChunkRequest {
+  string case_id = 1;
+  string chunk_id = 2;
+}
+message GetChunkResponse { bytes plaintext = 1; }
+
+message VerifyChunkRequest {
+  string case_id = 1;
+  string chunk_id = 2;
+}
+message VerifyChunkResponse { bool ok = 1; }
+
+message ListFilesRequest {
+  string case_id = 1;
+  string partition_id = 2;
+}
+
+message FileRow {
+  uint64 file_id = 1;
+  string filesystem_id = 2;
+  string partition_id = 3;
+  string path = 4;
+  string filename = 5;
+  string extension = 6;
+  uint64 size_bytes = 7;
+  bool is_directory = 8;
+  bool is_deleted = 9;
+}
+
+message ListFilesResponse { repeated FileRow files = 1; }
+
+message GetFileRequest {
+  string case_id = 1;
+  uint64 file_id = 2;
+}
+message GetFileResponse { FileRow file = 1; }
+
+message ListArtifactsRequest { string case_id = 1; }
+message ListArtifactsResponse { repeated string paths = 1; }
+
+message AnalysisRow { string json = 1; }
+
+message WriteAnalysisResultsRequest {
+  string case_id = 1;
+  string relative_path = 2;
+  repeated AnalysisRow rows = 3;
+}
+
+message WriteAnalysisResultsResponse {
+  bool ok = 1;
+  string path = 2;
+}
+
+message AppendProvenanceEventRequest {
+  string case_id = 1;
+  string action = 2;
+  string actor = 3;
+  string details_json = 4;
+  string tool_name = 5;
+  string tool_version = 6;
+}
+
+message AppendProvenanceEventResponse {
+  bool ok = 1;
+  string event_id = 2;
+  string timestamp = 3;
+}
