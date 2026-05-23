@@ -69,6 +69,10 @@ struct Args {
     /// Deterministic mode: fixed container ID and no real timestamp in IDs
     #[arg(long)]
     deterministic: bool,
+
+    /// Source sector size in bytes (e.g. 512, 4096)
+    #[arg(long, default_value_t = 512, value_parser = parse_sector_size)]
+    sector_size: u32,
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -241,7 +245,11 @@ fn convert(args: Args) -> Result<()> {
             format!("urn:offf:case:{}", Uuid::new_v4())
         };
 
-        let now = chrono::Utc::now();
+        let now = if args.deterministic {
+            deterministic_timestamp()
+        } else {
+            chrono::Utc::now()
+        };
 
         // ── Phase 5: acquisition.json ──────────────────────────────────────
         let acquisition = AcquisitionJson {
@@ -271,6 +279,7 @@ fn convert(args: Args) -> Result<()> {
             },
             parameters: AcquisitionParameters {
                 chunk_size,
+                sector_size: args.sector_size,
                 compression: compression.as_str().to_string(),
                 hash_algorithm: "sha256".to_string(),
                 deterministic: args.deterministic,
@@ -286,8 +295,13 @@ fn convert(args: Args) -> Result<()> {
         let prov_path = base.join("provenance/chain_of_custody.jsonl");
         let mut prov = ProvenanceWriter::new(&prov_path)
             .context("failed to open provenance writer")?;
+        let output_ref = if args.deterministic {
+            container_id.clone()
+        } else {
+            final_output.display().to_string()
+        };
 
-        prov.record(
+        prov.record_at(
             match input_kind {
                 InputKind::Raw => "converted_raw_to_offf",
                 InputKind::E01 => "converted_e01_to_offf",
@@ -307,16 +321,18 @@ fn convert(args: Args) -> Result<()> {
                     "source_container_sha256": e01_container_sha256,
                 },
                 "output": {
-                    "container": base.display().to_string(),
+                    "container": output_ref,
                     "merkle_root_sha256": merkle_root,
                 },
                 "parameters": {
                     "chunk_size": chunk_size,
+                    "sector_size": args.sector_size,
                     "compression": compression.as_str(),
                     "hash_algorithm": "sha256",
                     "deterministic": args.deterministic,
                 }
             }),
+            now.to_rfc3339(),
         )
         .context("failed to write provenance event")?;
 
@@ -335,7 +351,7 @@ fn convert(args: Args) -> Result<()> {
                     InputKind::E01 => "e01_image".to_string(),
                 },
                 size_bytes: source_size,
-                sector_size: 512,
+                sector_size: args.sector_size,
             },
             hashes: ManifestHashes {
                 source_sha256: source_sha256.clone(),
@@ -658,6 +674,23 @@ fn parse_size(s: &str) -> Result<u64> {
     Ok(n * mult)
 }
 
+fn parse_sector_size(s: &str) -> Result<u32, String> {
+    let n: u32 = s
+        .trim()
+        .parse()
+        .map_err(|_| format!("invalid sector size: {s}"))?;
+    if n == 0 {
+        return Err("sector size must be > 0".to_string());
+    }
+    Ok(n)
+}
+
+fn deterministic_timestamp() -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::parse_from_rfc3339("1970-01-01T00:00:00Z")
+        .expect("fixed RFC3339 timestamp must parse")
+        .with_timezone(&chrono::Utc)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -680,5 +713,20 @@ mod tests {
             detect_input_kind(std::path::Path::new("a.dd"), "auto").unwrap(),
             InputKind::Raw
         );
+    }
+
+    #[test]
+    fn parse_sector_size_variants() {
+        assert_eq!(parse_sector_size("512").unwrap(), 512);
+        assert_eq!(parse_sector_size("4096").unwrap(), 4096);
+        assert!(parse_sector_size("0").is_err());
+    }
+
+    #[test]
+    fn deterministic_timestamp_is_stable() {
+        let a = deterministic_timestamp();
+        let b = deterministic_timestamp();
+        assert_eq!(a, b);
+        assert_eq!(a.to_rfc3339(), "1970-01-01T00:00:00+00:00");
     }
 }

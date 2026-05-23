@@ -77,9 +77,29 @@ impl ProvenanceWriter {
         actor: &str,
         details: serde_json::Value,
     ) -> Result<(), OfffError> {
+        self.record_at(
+            action,
+            tool_name,
+            tool_version,
+            actor,
+            details,
+            Utc::now().to_rfc3339(),
+        )
+    }
+
+    /// Build and append a structured event with an explicit timestamp.
+    pub fn record_at(
+        &mut self,
+        action: &str,
+        tool_name: &str,
+        tool_version: &str,
+        actor: &str,
+        details: serde_json::Value,
+        timestamp: String,
+    ) -> Result<(), OfffError> {
         let event = ProvenanceEvent {
             event_id: format!("evt-{:06}", self.counter),
-            timestamp: Utc::now().to_rfc3339(),
+            timestamp,
             actor: actor.to_string(),
             action: action.to_string(),
             tool: ToolInfo {

@@ -38,10 +38,14 @@ P0 - Direct oppakken
   - Done: 2026-05-23
   - Progress: `write_chunk` valideert nu bestaande chunkbestanden cryptografisch voordat dedup skip plaatsvindt; tests toegevoegd voor hergebruik van valide bestaande chunk en fail-fast bij corrupte bestaande chunk
 
-- [ ] Hardening Sprint 3: true deterministic mode + sector-size parameter (P0)
+- [x] Hardening Sprint 3: true deterministic mode + sector-size parameter (P0)
   - Add `--sector-size` (default 512), persist in manifest and acquisition params
   - Make deterministic timestamps and event IDs stable for identical input
   - Ensure repeated deterministic runs produce byte-equivalent metadata
+  - Added: 2026-05-23
+  - Status: done
+  - Done: 2026-05-23
+  - Progress: `offf-convert` ondersteunt nu `--sector-size`; `manifest.source.sector_size` en `acquisition.parameters.sector_size` gebruiken deze waarde; deterministic mode gebruikt vaste timestamp (`1970-01-01T00:00:00Z`) en stabiele provenance output zodat repeated deterministic runs byte-equivalente `manifest.json`, `acquisition.json` en provenance opleveren
 
 - [ ] Hardening Sprint 4: Merkle proofs + full tree validation (P0)
   - Add inclusion proof generate/verify functions in `offf-core`

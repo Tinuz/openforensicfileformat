@@ -263,6 +263,7 @@ pub struct AcquisitionSource {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AcquisitionParameters {
     pub chunk_size: u64,
+    pub sector_size: u32,
     pub compression: String,
     pub hash_algorithm: String,
     pub deterministic: bool,

@@ -129,8 +129,11 @@ fn convert_image(
             size_bytes: source_size,
             sha256: source_sha256,
         },
+        source_container: None,
+        evidence_stream: None,
         parameters: AcquisitionParameters {
             chunk_size,
+            sector_size: 512,
             compression: compression.as_str().to_string(),
             hash_algorithm: "sha256".to_string(),
             deterministic: true,
