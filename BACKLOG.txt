@@ -24,6 +24,10 @@ P0 - Direct oppakken
   - Write `manifest.json` strictly as finalization point
   - Perform self-check before publish and atomic rename on local FS
   - Add object-store completion marker (`_OFFF_COMPLETE`) for S3 mode
+  - Added: 2026-05-23
+  - Status: in-progress
+  - Progress: `offf-convert` schrijft nu eerst naar temp output, schrijft `manifest.json` als laatste, draait self-check en publiceert via atomic rename; temp output wordt opgeruimd bij fouten
+  - Remaining: `_OFFF_COMPLETE` marker voor object storage volgt zodra convert write-pad `s3://` ondersteunt
 
 - [ ] Hardening Sprint 2: verify existing chunks before dedup skip (P0)
   - In `write_chunk`, verify stored and plaintext hashes when chunk exists

@@ -1,7 +1,7 @@
 use std::{
     fs,
     io::{BufReader, Read},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::Command,
 };
 
@@ -84,12 +84,29 @@ fn convert(args: Args) -> Result<()> {
         format!("input file not found: {}", args.input.display())
     })?;
 
-    if args.output.exists() {
+    let final_output = args.output;
+    if final_output.exists() {
         anyhow::bail!(
             "output path already exists: {}",
-            args.output.display()
+            final_output.display()
         );
     }
+
+    let tmp_output = build_temp_output_path(&final_output);
+    if tmp_output.exists() {
+        anyhow::bail!(
+            "temporary output path already exists: {}",
+            tmp_output.display()
+        );
+    }
+
+    if let Some(parent) = final_output.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create parent directory: {}", parent.display()))?;
+    }
+
+    fs::create_dir_all(&tmp_output)
+        .with_context(|| format!("failed to create temporary output directory: {}", tmp_output.display()))?;
 
     let chunk_size = parse_size(&args.chunk_size)
         .with_context(|| format!("invalid chunk size: {}", args.chunk_size))?;
@@ -124,224 +141,300 @@ fn convert(args: Args) -> Result<()> {
         input_path.clone()
     };
 
-    // ── Create container directory structure ───────────────────────────────
-    let base = &args.output;
-    for dir in &[
-        "chunks/sha256",
-        "hashes",
-        "maps",
-        "indexes",
-        "analysis",
-        "provenance",
-        "signatures",
-    ] {
-        fs::create_dir_all(base.join(dir))
-            .with_context(|| format!("failed to create directory {dir}"))?;
-    }
-
-    // ── Phase 1: compute source SHA-256 (single pass with chunk writing) ───
-    let source_size = stream_path.metadata()?.len();
-
-    println!("Source: {}", input_path.display());
-    if input_kind == InputKind::E01 {
-        println!("Input type: E01 (exported to raw stream)");
-        println!("Stream: {}", stream_path.display());
-    } else {
-        println!("Input type: raw");
-    }
-    println!("Size:   {} bytes", source_size);
-    println!("Chunks: {} bytes each", chunk_size);
-    println!("Compression: {}", compression.as_str());
-    println!();
-    println!("Processing…");
-
-    let file = fs::File::open(&stream_path)
-        .with_context(|| format!("cannot open {}", stream_path.display()))?;
-    let mut reader = BufReader::new(file);
-
-    let mut source_hasher = Sha256::new();
-    let mut chunks = Vec::new();
-    let mut sequence: u64 = 0;
-    let mut source_offset: u64 = 0;
-    let mut buf = vec![0u8; chunk_size as usize];
-
-    loop {
-        let n = read_exact_or_partial(&mut reader, &mut buf)?;
-        if n == 0 {
-            break;
-        }
-        let plaintext = &buf[..n];
-
-        // Update source hash
-        source_hasher.update(plaintext);
-
-        // Write chunk
-        let meta = write_chunk(base, sequence, source_offset, plaintext, &compression)
-            .with_context(|| format!("failed to write chunk {sequence}"))?;
-
-        source_offset += n as u64;
-        sequence += 1;
-
-        if sequence % 100 == 0 || n < chunk_size as usize {
-            println!(
-                "  chunk {:>6} / offset {:>15} bytes written",
-                sequence, source_offset
-            );
+    let conversion_result = (|| -> Result<String> {
+        // ── Create container directory structure ───────────────────────────
+        let base = &tmp_output;
+        for dir in &[
+            "chunks/sha256",
+            "hashes",
+            "maps",
+            "indexes",
+            "analysis",
+            "provenance",
+            "signatures",
+        ] {
+            fs::create_dir_all(base.join(dir))
+                .with_context(|| format!("failed to create directory {dir}"))?;
         }
 
-        chunks.push(meta);
-    }
+        // ── Phase 1: compute source SHA-256 (single pass with chunk writing) ───
+        let source_size = stream_path.metadata()?.len();
 
-    let source_sha256 = format!("{:x}", source_hasher.finalize());
-    println!("\nSource SHA-256: {source_sha256}");
-    println!("Total chunks:  {}", chunks.len());
-
-    // ── Phase 2: Merkle tree ───────────────────────────────────────────────
-    let leaf_hashes: Vec<String> = chunks.iter().map(|c| c.plaintext_sha256.clone()).collect();
-    let merkle_root = offf_core::hash::merkle_root(&leaf_hashes)
-        .context("failed to compute Merkle root")?;
-    let merkle_bytes = serialize_merkle_tree(&leaf_hashes)
-        .context("failed to serialise Merkle tree")?;
-
-    fs::write(base.join("hashes/merkle_tree.bin"), &merkle_bytes)
-        .context("failed to write merkle_tree.bin")?;
-
-    println!("Merkle root:   {merkle_root}");
-
-    // ── Phase 3: Parquet tables ────────────────────────────────────────────
-    write_physical_to_chunk(&base.join("maps/physical_to_chunk.parquet"), &chunks)
-        .context("failed to write physical_to_chunk.parquet")?;
-
-    write_leaves(&base.join("hashes/leaves.parquet"), &chunks)
-        .context("failed to write leaves.parquet")?;
-
-    // ── Phase 4: Container ID ──────────────────────────────────────────────
-    let container_id = if args.deterministic {
-        // Deterministic: derive from source hash
-        format!("urn:offf:case:{}", &source_sha256[..32])
-    } else {
-        format!("urn:offf:case:{}", Uuid::new_v4())
-    };
-
-    // ── Phase 5: manifest.json ─────────────────────────────────────────────
-    let now = chrono::Utc::now();
-    let manifest = ManifestJson {
-        offf_version: OFFF_VERSION.to_string(),
-        container_id: container_id.clone(),
-        created_at: now,
-        created_by_tool: ToolInfo {
-            name: TOOL_NAME.to_string(),
-            version: TOOL_VERSION.to_string(),
-        },
-        source: SourceInfo {
-            source_type: match input_kind {
-                InputKind::Raw => "raw_image".to_string(),
-                InputKind::E01 => "e01_image".to_string(),
-            },
-            size_bytes: source_size,
-            sector_size: 512,
-        },
-        hashes: ManifestHashes {
-            source_sha256: source_sha256.clone(),
-            merkle_root_sha256: merkle_root.clone(),
-        },
-        chunking: ChunkingInfo {
-            chunk_size,
-            chunking_mode: "fixed".to_string(),
-            compression: compression.as_str().to_string(),
-            hash_algorithm: "sha256".to_string(),
-        },
-        indexes: ManifestIndexes {
-            physical_to_chunk: "maps/physical_to_chunk.parquet".to_string(),
-        },
-    };
-
-    let manifest_json = serde_json::to_string_pretty(&manifest)
-        .context("failed to serialise manifest")?;
-    fs::write(base.join("manifest.json"), manifest_json)
-        .context("failed to write manifest.json")?;
-
-    // ── Phase 6: acquisition.json ──────────────────────────────────────────
-    let acquisition = AcquisitionJson {
-        container_id: container_id.clone(),
-        acquired_at: now,
-        tool: ToolInfo {
-            name: TOOL_NAME.to_string(),
-            version: TOOL_VERSION.to_string(),
-        },
-        source: AcquisitionSource {
-            path: input_path.display().to_string(),
-            size_bytes: source_size,
-            sha256: source_sha256.clone(),
-        },
-        source_container: e01_container_sha256.as_ref().map(|h| SourceContainerInfo {
-            container_type: "E01".to_string(),
-            container_sha256: h.clone(),
-            tool_used: args.ewf_export_tool.clone(),
-            conversion_time: now,
-        }),
-        evidence_stream: if input_kind == InputKind::E01 {
-            Some(EvidenceStreamInfo {
-                stream_sha256: source_sha256.clone(),
-            })
+        println!("Source: {}", input_path.display());
+        if input_kind == InputKind::E01 {
+            println!("Input type: E01 (exported to raw stream)");
+            println!("Stream: {}", stream_path.display());
         } else {
-            None
-        },
-        parameters: AcquisitionParameters {
-            chunk_size,
-            compression: compression.as_str().to_string(),
-            hash_algorithm: "sha256".to_string(),
-            deterministic: args.deterministic,
-        },
+            println!("Input type: raw");
+        }
+        println!("Size:   {} bytes", source_size);
+        println!("Chunks: {} bytes each", chunk_size);
+        println!("Compression: {}", compression.as_str());
+        println!();
+        println!("Processing…");
+
+        let file = fs::File::open(&stream_path)
+            .with_context(|| format!("cannot open {}", stream_path.display()))?;
+        let mut reader = BufReader::new(file);
+
+        let mut source_hasher = Sha256::new();
+        let mut chunks = Vec::new();
+        let mut sequence: u64 = 0;
+        let mut source_offset: u64 = 0;
+        let mut buf = vec![0u8; chunk_size as usize];
+
+        loop {
+            let n = read_exact_or_partial(&mut reader, &mut buf)?;
+            if n == 0 {
+                break;
+            }
+            let plaintext = &buf[..n];
+
+            // Update source hash
+            source_hasher.update(plaintext);
+
+            // Write chunk
+            let meta = write_chunk(base, sequence, source_offset, plaintext, &compression)
+                .with_context(|| format!("failed to write chunk {sequence}"))?;
+
+            source_offset += n as u64;
+            sequence += 1;
+
+            if sequence % 100 == 0 || n < chunk_size as usize {
+                println!(
+                    "  chunk {:>6} / offset {:>15} bytes written",
+                    sequence, source_offset
+                );
+            }
+
+            chunks.push(meta);
+        }
+
+        let source_sha256 = format!("{:x}", source_hasher.finalize());
+        println!("\nSource SHA-256: {source_sha256}");
+        println!("Total chunks:  {}", chunks.len());
+
+        // ── Phase 2: Merkle tree ───────────────────────────────────────────
+        let leaf_hashes: Vec<String> = chunks.iter().map(|c| c.plaintext_sha256.clone()).collect();
+        let merkle_root = offf_core::hash::merkle_root(&leaf_hashes)
+            .context("failed to compute Merkle root")?;
+        let merkle_bytes = serialize_merkle_tree(&leaf_hashes)
+            .context("failed to serialise Merkle tree")?;
+
+        fs::write(base.join("hashes/merkle_tree.bin"), &merkle_bytes)
+            .context("failed to write merkle_tree.bin")?;
+
+        println!("Merkle root:   {merkle_root}");
+
+        // ── Phase 3: Parquet tables ────────────────────────────────────────
+        write_physical_to_chunk(&base.join("maps/physical_to_chunk.parquet"), &chunks)
+            .context("failed to write physical_to_chunk.parquet")?;
+
+        write_leaves(&base.join("hashes/leaves.parquet"), &chunks)
+            .context("failed to write leaves.parquet")?;
+
+        // ── Phase 4: Container ID ──────────────────────────────────────────
+        let container_id = if args.deterministic {
+            // Deterministic: derive from source hash
+            format!("urn:offf:case:{}", &source_sha256[..32])
+        } else {
+            format!("urn:offf:case:{}", Uuid::new_v4())
+        };
+
+        let now = chrono::Utc::now();
+
+        // ── Phase 5: acquisition.json ──────────────────────────────────────
+        let acquisition = AcquisitionJson {
+            container_id: container_id.clone(),
+            acquired_at: now,
+            tool: ToolInfo {
+                name: TOOL_NAME.to_string(),
+                version: TOOL_VERSION.to_string(),
+            },
+            source: AcquisitionSource {
+                path: input_path.display().to_string(),
+                size_bytes: source_size,
+                sha256: source_sha256.clone(),
+            },
+            source_container: e01_container_sha256.as_ref().map(|h| SourceContainerInfo {
+                container_type: "E01".to_string(),
+                container_sha256: h.clone(),
+                tool_used: args.ewf_export_tool.clone(),
+                conversion_time: now,
+            }),
+            evidence_stream: if input_kind == InputKind::E01 {
+                Some(EvidenceStreamInfo {
+                    stream_sha256: source_sha256.clone(),
+                })
+            } else {
+                None
+            },
+            parameters: AcquisitionParameters {
+                chunk_size,
+                compression: compression.as_str().to_string(),
+                hash_algorithm: "sha256".to_string(),
+                deterministic: args.deterministic,
+            },
+        };
+
+        let acq_json = serde_json::to_string_pretty(&acquisition)
+            .context("failed to serialise acquisition")?;
+        fs::write(base.join("acquisition.json"), acq_json)
+            .context("failed to write acquisition.json")?;
+
+        // ── Phase 6: Provenance ────────────────────────────────────────────
+        let prov_path = base.join("provenance/chain_of_custody.jsonl");
+        let mut prov = ProvenanceWriter::new(&prov_path)
+            .context("failed to open provenance writer")?;
+
+        prov.record(
+            match input_kind {
+                InputKind::Raw => "converted_raw_to_offf",
+                InputKind::E01 => "converted_e01_to_offf",
+            },
+            TOOL_NAME,
+            TOOL_VERSION,
+            "system",
+            serde_json::json!({
+                "input": {
+                    "path": input_path.display().to_string(),
+                    "type": match input_kind {
+                        InputKind::Raw => "raw",
+                        InputKind::E01 => "e01",
+                    },
+                    "size_bytes": source_size,
+                    "sha256": source_sha256,
+                    "source_container_sha256": e01_container_sha256,
+                },
+                "output": {
+                    "container": base.display().to_string(),
+                    "merkle_root_sha256": merkle_root,
+                },
+                "parameters": {
+                    "chunk_size": chunk_size,
+                    "compression": compression.as_str(),
+                    "hash_algorithm": "sha256",
+                    "deterministic": args.deterministic,
+                }
+            }),
+        )
+        .context("failed to write provenance event")?;
+
+        // ── Phase 7: manifest.json (finalization point) ───────────────────
+        let manifest = ManifestJson {
+            offf_version: OFFF_VERSION.to_string(),
+            container_id: container_id.clone(),
+            created_at: now,
+            created_by_tool: ToolInfo {
+                name: TOOL_NAME.to_string(),
+                version: TOOL_VERSION.to_string(),
+            },
+            source: SourceInfo {
+                source_type: match input_kind {
+                    InputKind::Raw => "raw_image".to_string(),
+                    InputKind::E01 => "e01_image".to_string(),
+                },
+                size_bytes: source_size,
+                sector_size: 512,
+            },
+            hashes: ManifestHashes {
+                source_sha256: source_sha256.clone(),
+                merkle_root_sha256: merkle_root.clone(),
+            },
+            chunking: ChunkingInfo {
+                chunk_size,
+                chunking_mode: "fixed".to_string(),
+                compression: compression.as_str().to_string(),
+                hash_algorithm: "sha256".to_string(),
+            },
+            indexes: ManifestIndexes {
+                physical_to_chunk: "maps/physical_to_chunk.parquet".to_string(),
+            },
+        };
+
+        let manifest_json = serde_json::to_string_pretty(&manifest)
+            .context("failed to serialise manifest")?;
+        fs::write(base.join("manifest.json"), manifest_json)
+            .context("failed to write manifest.json")?;
+
+        // ── Phase 8: Self-check before publish ─────────────────────────────
+        self_check_container(base)
+            .context("internal container self-check failed")?;
+
+        Ok(container_id)
+    })();
+
+    let container_id = match conversion_result {
+        Ok(id) => id,
+        Err(e) => {
+            let cleanup_result = fs::remove_dir_all(&tmp_output);
+            if let Err(cleanup_err) = cleanup_result {
+                return Err(e).context(format!(
+                    "conversion failed and temporary output cleanup failed: {} ({cleanup_err})",
+                    tmp_output.display()
+                ));
+            }
+            return Err(e).context(format!(
+                "conversion failed; temporary output cleaned: {}",
+                tmp_output.display()
+            ));
+        }
     };
 
-    let acq_json = serde_json::to_string_pretty(&acquisition)
-        .context("failed to serialise acquisition")?;
-    fs::write(base.join("acquisition.json"), acq_json)
-        .context("failed to write acquisition.json")?;
-
-    // ── Phase 7: Provenance ────────────────────────────────────────────────
-    let prov_path = base.join("provenance/chain_of_custody.jsonl");
-    let mut prov = ProvenanceWriter::new(&prov_path)
-        .context("failed to open provenance writer")?;
-
-    prov.record(
-        match input_kind {
-            InputKind::Raw => "converted_raw_to_offf",
-            InputKind::E01 => "converted_e01_to_offf",
-        },
-        TOOL_NAME,
-        TOOL_VERSION,
-        "system",
-        serde_json::json!({
-            "input": {
-                "path": input_path.display().to_string(),
-                "type": match input_kind {
-                    InputKind::Raw => "raw",
-                    InputKind::E01 => "e01",
-                },
-                "size_bytes": source_size,
-                "sha256": source_sha256,
-                "source_container_sha256": e01_container_sha256,
-            },
-            "output": {
-                "container": base.display().to_string(),
-                "merkle_root_sha256": merkle_root,
-            },
-            "parameters": {
-                "chunk_size": chunk_size,
-                "compression": compression.as_str(),
-                "hash_algorithm": "sha256",
-                "deterministic": args.deterministic,
-            }
-        }),
-    )
-    .context("failed to write provenance event")?;
+    // Publish temporary container atomically on local filesystem.
+    fs::rename(&tmp_output, &final_output).with_context(|| {
+        format!(
+            "failed to publish container atomically: {} -> {}",
+            tmp_output.display(),
+            final_output.display()
+        )
+    })?;
 
     println!();
-    println!("Container written to: {}", base.display());
+    println!("Container written to: {}", final_output.display());
     println!("Container ID:         {container_id}");
     println!("Done.");
+
+    Ok(())
+}
+
+fn build_temp_output_path(final_output: &Path) -> PathBuf {
+    let parent = final_output.parent().unwrap_or_else(|| Path::new("."));
+    let name = final_output
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("offf-container");
+    parent.join(format!("{name}.tmp-{}", Uuid::new_v4()))
+}
+
+fn self_check_container(base: &Path) -> Result<()> {
+    let required_files = [
+        "manifest.json",
+        "acquisition.json",
+        "maps/physical_to_chunk.parquet",
+        "hashes/leaves.parquet",
+        "hashes/merkle_tree.bin",
+        "provenance/chain_of_custody.jsonl",
+    ];
+
+    for rel in required_files {
+        let p = base.join(rel);
+        if !p.exists() {
+            anyhow::bail!("required file missing after conversion: {}", p.display());
+        }
+        let meta = fs::metadata(&p)?;
+        if meta.len() == 0 {
+            anyhow::bail!("required file is empty after conversion: {}", p.display());
+        }
+    }
+
+    let manifest_raw = fs::read_to_string(base.join("manifest.json"))?;
+    let _manifest: ManifestJson = serde_json::from_str(&manifest_raw)
+        .context("failed to parse manifest in self-check")?;
+
+    let acq_raw = fs::read_to_string(base.join("acquisition.json"))?;
+    let _acq: AcquisitionJson = serde_json::from_str(&acq_raw)
+        .context("failed to parse acquisition in self-check")?;
 
     Ok(())
 }
