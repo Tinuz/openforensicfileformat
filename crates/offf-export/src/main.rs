@@ -10,6 +10,7 @@ use clap::Parser;
 
 use offf_core::{
     chunk::read_chunk,
+    packed::{pack_directory, read_index, unpack_to_directory},
     parquet_io::read_physical_to_chunk,
     types::ManifestJson,
 };
@@ -19,23 +20,89 @@ use offf_core::{
 #[derive(Parser, Debug)]
 #[command(
     name = "offf-export",
-    about = "Reconstruct a raw/dd image from an OFFF container",
+    about = "Export raw images and manage OFFF packed containers",
     version
 )]
 struct Args {
-    /// Path to the OFFF container directory
-    container: PathBuf,
+    #[command(subcommand)]
+    command: Command,
+}
 
-    /// Output file path
-    #[arg(long, short)]
-    output: PathBuf,
+#[derive(clap::Subcommand, Debug)]
+enum Command {
+    /// Reconstruct a raw/dd image from an exploded OFFF directory
+    Export {
+        /// Path to the OFFF container directory
+        container: PathBuf,
+        /// Output file path
+        #[arg(long, short)]
+        output: PathBuf,
+    },
+
+    /// Pack an exploded OFFF directory into one .offfpack file
+    Pack {
+        /// Input OFFF directory
+        input: PathBuf,
+        /// Output packed file
+        #[arg(long, short)]
+        output: PathBuf,
+    },
+
+    /// List entries inside a packed OFFF container
+    List {
+        /// Input packed file (.offfpack)
+        input: PathBuf,
+    },
+
+    /// Unpack a .offfpack file into a directory
+    Unpack {
+        /// Input packed file (.offfpack)
+        input: PathBuf,
+        /// Output directory
+        #[arg(long, short)]
+        output: PathBuf,
+    },
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    export(&args.container, &args.output)
+    match args.command {
+        Command::Export { container, output } => export(&container, &output),
+        Command::Pack { input, output } => {
+            let index = pack_directory(&input, &output)
+                .with_context(|| format!("failed to pack {}", input.display()))?;
+            println!(
+                "Packed {} entries into {}",
+                index.entries.len(),
+                output.display()
+            );
+            Ok(())
+        }
+        Command::List { input } => {
+            let index = read_index(&input)
+                .with_context(|| format!("failed to read packed index from {}", input.display()))?;
+            println!("format: {}", index.format);
+            println!("version: {}", index.version);
+            println!("entries: {}", index.entries.len());
+            println!();
+            for e in index.entries {
+                println!("{}\t{}\t{}", e.path, e.length, e.sha256);
+            }
+            Ok(())
+        }
+        Command::Unpack { input, output } => {
+            let index = unpack_to_directory(&input, &output)
+                .with_context(|| format!("failed to unpack {}", input.display()))?;
+            println!(
+                "Unpacked {} entries to {}",
+                index.entries.len(),
+                output.display()
+            );
+            Ok(())
+        }
+    }
 }
 
 fn export(base: &PathBuf, output: &PathBuf) -> Result<()> {

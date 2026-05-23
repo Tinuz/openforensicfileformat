@@ -163,7 +163,8 @@ case.offf/
 
 De directory-container is leidend.
 
-Een single-file variant mag later worden toegevoegd, maar is niet leidend voor fase 1.
+Een single-file variant (`.offfpack`) is nu beschikbaar als initiële implementatie,
+maar de directory-structuur blijft de canonieke representatie.
 
 De structuur moet geschikt zijn voor:
 

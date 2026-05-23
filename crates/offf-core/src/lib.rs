@@ -3,6 +3,7 @@ pub mod error;
 pub mod hash;
 pub mod ntfs;
 pub mod parquet_io;
+pub mod packed;
 pub mod partition;
 pub mod provenance;
 pub mod storage;

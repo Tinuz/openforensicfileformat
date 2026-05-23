@@ -7,6 +7,7 @@
 - parquet IO helpers
 - provenance writer
 - storage abstractie voor local en S3
+- packed container helpers (`.offfpack` pack/list/unpack)
 - centrale types en fouten
 
 ## Gebruik

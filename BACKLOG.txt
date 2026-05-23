@@ -1,6 +1,16 @@
 OFFF Backlog
 ============
 
+- [x] OFFF packed container (single-file) initial implementation (P1)
+  - Add core packed container format with deterministic index + checksum footer
+  - Add pack/list/unpack operations for `.offfpack`
+  - Keep exploded directory model as canonical representation
+  - Owner: next implementation cycle
+  - Added: 2026-05-23
+  - Status: done
+  - Done: 2026-05-23
+  - Progress: `offf-core::packed` toegevoegd met `pack_directory`, `read_index`, `unpack_to_directory` + tests; `offf-export` uitgebreid met `pack`, `list`, `unpack`, `export`
+
 - [x] Phase 5: MinIO end-to-end smoke test
   - Validate `offf-verify` against s3:// URI on MinIO
   - Validate `offf-keyword-worker` and `offf-yara-worker` against remote container
