@@ -55,13 +55,53 @@ pub fn write_chunk(
     // 3. Hash stored bytes
     let stored_hash = hex_sha256(&stored_bytes);
 
-    // 4. Write (skip if already present – dedup by content)
+    // 4. Write (skip only after validating existing chunk bytes)
     let path = chunk_path(base, &plaintext_hash);
     if !path.exists() {
         fs::create_dir_all(path.parent().unwrap())?;
         let mut f = fs::File::create(&path)?;
         f.write_all(&stored_bytes)?;
         f.sync_all()?;
+    } else {
+        // Existing chunk must cryptographically match before dedup skip.
+        let existing_stored = fs::read(&path)?;
+        let existing_stored_hash = hex_sha256(&existing_stored);
+        if existing_stored_hash != stored_hash {
+            return Err(OfffError::HashMismatch {
+                chunk_id: chunk_id.clone(),
+                expected: stored_hash,
+                actual: existing_stored_hash,
+            });
+        }
+
+        let existing_plain = match compression {
+            Compression::None => existing_stored,
+            Compression::Zstd => {
+                let mut decoder = zstd::Decoder::new(existing_stored.as_slice()).map_err(|e| {
+                    OfffError::DecompressionError {
+                        chunk_id: chunk_id.clone(),
+                        msg: e.to_string(),
+                    }
+                })?;
+                let mut buf = Vec::with_capacity(plaintext.len());
+                decoder
+                    .read_to_end(&mut buf)
+                    .map_err(|e| OfffError::DecompressionError {
+                        chunk_id: chunk_id.clone(),
+                        msg: e.to_string(),
+                    })?;
+                buf
+            }
+        };
+
+        let existing_plain_hash = hex_sha256(&existing_plain);
+        if existing_plain_hash != plaintext_hash {
+            return Err(OfffError::HashMismatch {
+                chunk_id: chunk_id.clone(),
+                expected: plaintext_hash,
+                actual: existing_plain_hash,
+            });
+        }
     }
 
     Ok(ChunkMetadata {
@@ -251,6 +291,39 @@ mod tests {
         fs::write(&path, bytes).unwrap();
 
         let err = verify_chunk(dir.path(), &meta).unwrap_err();
+        assert!(matches!(err, OfffError::HashMismatch { .. }));
+    }
+
+    #[test]
+    fn write_chunk_reuses_valid_existing_chunk() {
+        let dir = tempdir().unwrap();
+        let data: Vec<u8> = vec![0x42; 4096];
+
+        let meta1 = write_chunk(dir.path(), 0, 0, &data, &Compression::None).unwrap();
+        let meta2 = write_chunk(dir.path(), 1, 4096, &data, &Compression::None).unwrap();
+
+        assert_eq!(meta1.chunk_id, meta2.chunk_id);
+        assert_eq!(meta1.plaintext_sha256, meta2.plaintext_sha256);
+
+        // Existing file should still verify and contain original bytes.
+        let back = read_chunk(dir.path(), &meta2).unwrap();
+        assert_eq!(back, data);
+    }
+
+    #[test]
+    fn write_chunk_fails_on_corrupt_existing_chunk() {
+        let dir = tempdir().unwrap();
+        let data: Vec<u8> = vec![0xCD; 2048];
+
+        let meta = write_chunk(dir.path(), 0, 0, &data, &Compression::None).unwrap();
+        let path = chunk_path(dir.path(), &meta.plaintext_sha256);
+
+        // Corrupt existing stored bytes before second write attempt.
+        let mut bytes = fs::read(&path).unwrap();
+        bytes[5] ^= 0xFF;
+        fs::write(&path, bytes).unwrap();
+
+        let err = write_chunk(dir.path(), 1, 2048, &data, &Compression::None).unwrap_err();
         assert!(matches!(err, OfffError::HashMismatch { .. }));
     }
 }
