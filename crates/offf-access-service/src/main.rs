@@ -1,11 +1,6 @@
-use std::{
-    env, fs,
-    net::SocketAddr,
-    path::Path,
-};
+use std::{env, fs, net::SocketAddr, path::Path};
 
 use anyhow::{Context, Result};
-use chrono::Utc;
 use arrow::{
     array::{BooleanArray, StringArray, UInt64Array},
     record_batch::RecordBatch,
@@ -17,6 +12,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use chrono::Utc;
 use offf_core::{
     parquet_io::read_physical_to_chunk_bytes,
     storage::{read_chunk_verified, ContainerRef},
@@ -29,7 +25,6 @@ use tokio::net::TcpListener;
 use tonic::{Code, Request, Response as GrpcResponse, Status};
 use tower_http::trace::TraceLayer;
 
-use offf_access_service::grpc;
 use grpc::offf_access_service_server::{OfffAccessService, OfffAccessServiceServer};
 use grpc::{
     AppendAnalysisCorrectionRequest, AppendAnalysisCorrectionResponse,
@@ -39,6 +34,7 @@ use grpc::{
     VerifyChunkRequest, VerifyChunkResponse as GrpcVerifyChunkResponse,
     WriteAnalysisResultsRequest, WriteAnalysisResultsResponse,
 };
+use offf_access_service::grpc;
 
 #[derive(Clone)]
 struct AppState {
@@ -115,7 +111,10 @@ impl AppRole {
     }
 
     fn can_append_provenance(self) -> bool {
-        matches!(self, Self::AnalysisWorker | Self::Indexer | Self::AcquisitionProducer)
+        matches!(
+            self,
+            Self::AnalysisWorker | Self::Indexer | Self::AcquisitionProducer
+        )
     }
 
     fn can_append_analysis_correction(self) -> bool {
@@ -229,17 +228,15 @@ async fn main() -> Result<()> {
     let rest_bind = env::var("OFFF_ACCESS_BIND").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
     let grpc_bind =
         env::var("OFFF_ACCESS_GRPC_BIND").unwrap_or_else(|_| "0.0.0.0:50051".to_string());
-    let tool_registry_path = env::var("OFFF_TOOL_REGISTRY")
-        .unwrap_or_else(|_| "config/tool-registry.json".to_string());
+    let tool_registry_path =
+        env::var("OFFF_TOOL_REGISTRY").unwrap_or_else(|_| "config/tool-registry.json".to_string());
     let auth_mode = env::var("OFFF_AUTH_MODE")
         .ok()
         .as_deref()
         .and_then(AuthMode::parse)
         .unwrap_or(AuthMode::DevHeaders);
     let rest_addr: SocketAddr = rest_bind.parse().context("invalid OFFF_ACCESS_BIND")?;
-    let grpc_addr: SocketAddr = grpc_bind
-        .parse()
-        .context("invalid OFFF_ACCESS_GRPC_BIND")?;
+    let grpc_addr: SocketAddr = grpc_bind.parse().context("invalid OFFF_ACCESS_GRPC_BIND")?;
 
     let state = AppState {
         cases_root,
@@ -252,13 +249,25 @@ async fn main() -> Result<()> {
     let app = Router::new()
         .route("/cases/{case_id}/manifest", get(get_manifest))
         .route("/cases/{case_id}/chunks/{chunk_id}", get(get_chunk))
-        .route("/cases/{case_id}/chunks/{chunk_id}/verify", get(verify_chunk_endpoint))
+        .route(
+            "/cases/{case_id}/chunks/{chunk_id}/verify",
+            get(verify_chunk_endpoint),
+        )
         .route("/cases/{case_id}/files", get(list_files))
         .route("/cases/{case_id}/files/{file_id}", get(get_file))
         .route("/cases/{case_id}/artifacts", get(list_artifacts))
-        .route("/cases/{case_id}/analysis-results", post(write_analysis_results))
-        .route("/cases/{case_id}/analysis-corrections", post(append_analysis_correction))
-        .route("/cases/{case_id}/provenance-events", post(append_provenance_event))
+        .route(
+            "/cases/{case_id}/analysis-results",
+            post(write_analysis_results),
+        )
+        .route(
+            "/cases/{case_id}/analysis-corrections",
+            post(append_analysis_correction),
+        )
+        .route(
+            "/cases/{case_id}/provenance-events",
+            post(append_provenance_event),
+        )
         .layer(TraceLayer::new_for_http())
         .with_state(state.clone());
 
@@ -309,7 +318,8 @@ impl OfffAccessService for GrpcAccessService {
         request: Request<GetChunkRequest>,
     ) -> Result<GrpcResponse<GetChunkResponse>, Status> {
         let req = request.into_inner();
-        let (case_ref, _, chunks) = load_case_data(&self.state, &req.case_id).map_err(grpc_status)?;
+        let (case_ref, _, chunks) =
+            load_case_data(&self.state, &req.case_id).map_err(grpc_status)?;
         let chunk = find_chunk(&chunks, &req.chunk_id).map_err(grpc_status)?;
         let plaintext = read_chunk_verified(&case_ref, chunk)
             .map_err(ApiError::from)
@@ -322,7 +332,8 @@ impl OfffAccessService for GrpcAccessService {
         request: Request<VerifyChunkRequest>,
     ) -> Result<GrpcResponse<GrpcVerifyChunkResponse>, Status> {
         let req = request.into_inner();
-        let (case_ref, _, chunks) = load_case_data(&self.state, &req.case_id).map_err(grpc_status)?;
+        let (case_ref, _, chunks) =
+            load_case_data(&self.state, &req.case_id).map_err(grpc_status)?;
         let chunk = find_chunk(&chunks, &req.chunk_id).map_err(grpc_status)?;
         read_chunk_verified(&case_ref, chunk)
             .map_err(ApiError::from)
@@ -726,7 +737,9 @@ async fn write_analysis_results(
             outcome = "deny",
             reason = "role cannot write analysis"
         );
-        return Err(ApiError::forbidden("role not allowed to write analysis layer"));
+        return Err(ApiError::forbidden(
+            "role not allowed to write analysis layer",
+        ));
     }
     if let Err(err) = enforce_tool_registry(&state, &actor, WriteLayer::Analysis) {
         log_denied_write_best_effort(
@@ -921,7 +934,10 @@ async fn append_analysis_correction(
     }))
 }
 
-fn list_file_index_values(case_ref: &ContainerRef, partition_id: Option<&str>) -> Result<Vec<Value>, ApiError> {
+fn list_file_index_values(
+    case_ref: &ContainerRef,
+    partition_id: Option<&str>,
+) -> Result<Vec<Value>, ApiError> {
     let mut rows = Vec::new();
 
     if let Some(partition_id) = partition_id {
@@ -943,7 +959,11 @@ fn list_file_index_values(case_ref: &ContainerRef, partition_id: Option<&str>) -
     Ok(rows)
 }
 
-fn write_analysis_rows(case_ref: &ContainerRef, relative_path: &str, rows: &[Value]) -> Result<String, ApiError> {
+fn write_analysis_rows(
+    case_ref: &ContainerRef,
+    relative_path: &str,
+    rows: &[Value],
+) -> Result<String, ApiError> {
     let rel = normalize_rel_path(relative_path)?;
     if !rel.starts_with("analysis/jobs/") {
         return Err(ApiError::bad_request(
@@ -962,7 +982,9 @@ fn write_analysis_rows(case_ref: &ContainerRef, relative_path: &str, rows: &[Val
     }
 
     if case_ref.exists(&rel).map_err(ApiError::from)? {
-        return Err(ApiError::forbidden("refusing to overwrite existing analysis result"));
+        return Err(ApiError::forbidden(
+            "refusing to overwrite existing analysis result",
+        ));
     }
 
     let mut content = String::new();
@@ -1004,8 +1026,8 @@ fn actor_from_headers(auth_mode: AuthMode, headers: &HeaderMap) -> Result<ActorC
         return Err(ApiError::unauthorized("empty x-offf-tool-id"));
     }
 
-    let role = AppRole::parse(role_raw)
-        .ok_or_else(|| ApiError::unauthorized("invalid x-offf-role"))?;
+    let role =
+        AppRole::parse(role_raw).ok_or_else(|| ApiError::unauthorized("invalid x-offf-role"))?;
 
     Ok(ActorContext { role, tool_id })
 }
@@ -1024,9 +1046,7 @@ fn actor_from_metadata(
             ))
         })?
         .to_str()
-        .map_err(|_| {
-            AuthError::Unauthorized(format!("invalid {}", auth_mode.role_header()))
-        })?;
+        .map_err(|_| AuthError::Unauthorized(format!("invalid {}", auth_mode.role_header())))?;
     let tool_id = metadata
         .get(auth_mode.tool_header())
         .ok_or_else(|| {
@@ -1037,9 +1057,7 @@ fn actor_from_metadata(
             ))
         })?
         .to_str()
-        .map_err(|_| {
-            AuthError::Unauthorized(format!("invalid {}", auth_mode.tool_header()))
-        })?
+        .map_err(|_| AuthError::Unauthorized(format!("invalid {}", auth_mode.tool_header())))?
         .trim()
         .to_string();
     if tool_id.is_empty() {
@@ -1068,9 +1086,7 @@ fn enforce_tool_registry(
         .tools
         .iter()
         .find(|t| t.tool_id == actor.tool_id)
-        .ok_or_else(|| {
-            ApiError::forbidden(format!("tool not registered: {}", actor.tool_id))
-        })?;
+        .ok_or_else(|| ApiError::forbidden(format!("tool not registered: {}", actor.tool_id)))?;
 
     if !rec.status.eq_ignore_ascii_case("approved") {
         return Err(ApiError::forbidden(format!(
@@ -1080,7 +1096,11 @@ fn enforce_tool_registry(
     }
 
     let role_name = role_name(actor.role);
-    if !rec.allowed_roles.iter().any(|r| r.eq_ignore_ascii_case(role_name)) {
+    if !rec
+        .allowed_roles
+        .iter()
+        .any(|r| r.eq_ignore_ascii_case(role_name))
+    {
         return Err(ApiError::forbidden(format!(
             "tool role not allowed: tool={} role={role_name}",
             actor.tool_id
@@ -1180,7 +1200,10 @@ fn append_analysis_correction_event(
         "correction_type".to_string(),
         Value::String(correction_type.trim().to_string()),
     );
-    event.insert("reason".to_string(), Value::String(reason.trim().to_string()));
+    event.insert(
+        "reason".to_string(),
+        Value::String(reason.trim().to_string()),
+    );
     if let Some(prov) = provenance_ref.and_then(|v| {
         let trimmed = v.trim().to_string();
         if trimmed.is_empty() {
@@ -1293,7 +1316,10 @@ fn log_denied_write_best_effort(
         "event_id".to_string(),
         Value::String(format!("denied-{counter:06}")),
     );
-    event.insert("timestamp".to_string(), Value::String(Utc::now().to_rfc3339()));
+    event.insert(
+        "timestamp".to_string(),
+        Value::String(Utc::now().to_rfc3339()),
+    );
     event.insert("case_id".to_string(), Value::String(case_id.to_string()));
     event.insert("action".to_string(), Value::String(action.to_string()));
     event.insert(
@@ -1380,7 +1406,10 @@ fn resolve_case_ref(state: &AppState, case_id: &str) -> Result<ContainerRef, Api
 
     if state.cases_root.starts_with("s3://") {
         let root = state.cases_root.trim_end_matches('/');
-        for candidate in [format!("{root}/{case_id}"), format!("{root}/{case_id}.offf")] {
+        for candidate in [
+            format!("{root}/{case_id}"),
+            format!("{root}/{case_id}.offf"),
+        ] {
             let case_ref = ContainerRef::parse(&candidate).map_err(ApiError::from)?;
             if case_ref.exists("manifest.json").map_err(ApiError::from)? {
                 return Ok(case_ref);
@@ -1420,7 +1449,10 @@ fn read_json_file(case_ref: &ContainerRef, rel: &str) -> Result<Value, ApiError>
     Ok(value)
 }
 
-fn find_chunk<'a>(chunks: &'a [ChunkMetadata], chunk_id: &str) -> Result<&'a ChunkMetadata, ApiError> {
+fn find_chunk<'a>(
+    chunks: &'a [ChunkMetadata],
+    chunk_id: &str,
+) -> Result<&'a ChunkMetadata, ApiError> {
     chunks
         .iter()
         .find(|c| c.chunk_id == chunk_id)

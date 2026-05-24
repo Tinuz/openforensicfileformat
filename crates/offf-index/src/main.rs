@@ -1,4 +1,7 @@
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -51,13 +54,16 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Partitions { container } => cmd_partitions(&container),
-        Command::Filesystem { container, partition } => cmd_filesystem(&container, partition),
+        Command::Filesystem {
+            container,
+            partition,
+        } => cmd_filesystem(&container, partition),
     }
 }
 
 // ── offf-index partitions ─────────────────────────────────────────────────────
 
-fn cmd_partitions(base: &PathBuf) -> Result<()> {
+fn cmd_partitions(base: &Path) -> Result<()> {
     let manifest_raw = fs::read_to_string(base.join("manifest.json"))
         .context("manifest.json not found – is this an OFFF container?")?;
     let manifest: ManifestJson =
@@ -92,8 +98,7 @@ fn cmd_partitions(base: &PathBuf) -> Result<()> {
         fs::create_dir_all(parent)?;
     }
     let json = serde_json::to_string_pretty(&table).context("serialisation failed")?;
-    fs::write(&out_path, &json)
-        .with_context(|| format!("write failed: {}", out_path.display()))?;
+    fs::write(&out_path, &json).with_context(|| format!("write failed: {}", out_path.display()))?;
 
     println!();
     println!("Partition table type: {}", table.partition_table_type);
@@ -106,11 +111,7 @@ fn cmd_partitions(base: &PathBuf) -> Result<()> {
     for p in &table.partitions {
         println!(
             "  {:8}  {:>15} bytes  LBA {:>9}–{:>9}  {}",
-            p.partition_id,
-            p.length,
-            p.first_lba,
-            p.last_lba,
-            p.partition_type
+            p.partition_id, p.length, p.first_lba, p.last_lba, p.partition_type
         );
         if let Some(name) = &p.name {
             print!("           Name: {name}");
@@ -150,7 +151,7 @@ fn cmd_partitions(base: &PathBuf) -> Result<()> {
 
 // ── offf-index filesystem ─────────────────────────────────────────────────────
 
-fn cmd_filesystem(base: &PathBuf, partition_arg: Option<String>) -> Result<()> {
+fn cmd_filesystem(base: &Path, partition_arg: Option<String>) -> Result<()> {
     let manifest_raw = fs::read_to_string(base.join("manifest.json"))
         .context("manifest.json not found – is this an OFFF container?")?;
     let manifest: ManifestJson =
@@ -173,9 +174,7 @@ fn cmd_filesystem(base: &PathBuf, partition_arg: Option<String>) -> Result<()> {
 
     println!("Partition:    {partition_id}");
     println!("Filesystem:   {fs_type}");
-    println!(
-        "Volume:       offset={volume_offset} bytes, size={volume_size} bytes"
-    );
+    println!("Volume:       offset={volume_offset} bytes, size={volume_size} bytes");
     println!();
 
     if fs_type.to_uppercase() != "NTFS" {
@@ -197,8 +196,14 @@ fn cmd_filesystem(base: &PathBuf, partition_arg: Option<String>) -> Result<()> {
     .context("NTFS indexing failed")?;
 
     let total = rows.len();
-    let files = rows.iter().filter(|r| !r.is_directory && !r.is_deleted).count();
-    let dirs = rows.iter().filter(|r| r.is_directory && !r.is_deleted).count();
+    let files = rows
+        .iter()
+        .filter(|r| !r.is_directory && !r.is_deleted)
+        .count();
+    let dirs = rows
+        .iter()
+        .filter(|r| r.is_directory && !r.is_deleted)
+        .count();
     let deleted = rows.iter().filter(|r| r.is_deleted).count();
     let partial = rows.iter().filter(|r| r.parser_status == "partial").count();
     let errors = rows.iter().filter(|r| r.parser_status == "error").count();
@@ -240,7 +245,7 @@ fn cmd_filesystem(base: &PathBuf, partition_arg: Option<String>) -> Result<()> {
 
 /// Determine the volume offset, size, partition ID, and filesystem type.
 fn resolve_partition(
-    base: &PathBuf,
+    base: &Path,
     chunks: &[offf_core::types::ChunkMetadata],
     sector_size: u32,
     partition_arg: &Option<String>,

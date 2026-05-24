@@ -186,10 +186,7 @@ fn verify(
     };
 
     // ── Check 1: manifest exists and is parseable ──────────────────────────
-    let manifest_raw = match container.read_text("manifest.json") {
-        Ok(s) => Some(s),
-        Err(_) => None,
-    };
+    let manifest_raw = container.read_text("manifest.json").ok();
 
     let manifest_value: Option<serde_json::Value> = manifest_raw
         .as_ref()
@@ -227,10 +224,7 @@ fn verify(
     } else {
         report.fail(
             "OFFF version",
-            format!(
-                "expected {OFFF_VERSION}, got {}",
-                manifest.offf_version
-            ),
+            format!("expected {OFFF_VERSION}, got {}", manifest.offf_version),
         );
     }
 
@@ -249,7 +243,10 @@ fn verify(
             Ok(_) => report.ok("Acquisition present and valid"),
             Err(e) => report.fail("Acquisition present and valid", e.to_string()),
         },
-        Err(_) => report.fail("Acquisition present and valid", "acquisition.json not found"),
+        Err(_) => report.fail(
+            "Acquisition present and valid",
+            "acquisition.json not found",
+        ),
     }
     let chunks = match all_chunks {
         Ok(c) => {
@@ -300,21 +297,14 @@ fn verify(
             Ok(()) => stored_ok += 1,
             Err(e) => {
                 stored_fail += 1;
-                report.fail(
-                    format!("Chunk {} hash", chunk.sequence),
-                    e.to_string(),
-                );
+                report.fail(format!("Chunk {} hash", chunk.sequence), e.to_string());
             }
         }
     }
 
     if stored_fail == 0 {
-        report.ok(format!(
-            "Stored hash validation: {stored_ok}/{total} OK"
-        ));
-        report.ok(format!(
-            "Plaintext hash validation: {stored_ok}/{total} OK"
-        ));
+        report.ok(format!("Stored hash validation: {stored_ok}/{total} OK"));
+        report.ok(format!("Plaintext hash validation: {stored_ok}/{total} OK"));
     } else {
         report.fail(
             "Stored/plaintext hash validation",
@@ -332,7 +322,8 @@ fn verify(
         let leaves_rows = match container.local_path("hashes/leaves.parquet") {
             Some(path) => read_leaves(&path),
             None => Err(offf_core::OfffError::InvalidContainer(
-                "leaves.parquet validation for non-local container is not yet supported".to_string(),
+                "leaves.parquet validation for non-local container is not yet supported"
+                    .to_string(),
             )),
         };
 
@@ -369,7 +360,11 @@ fn verify(
                     if let Some(msg) = mismatch {
                         report.fail("Leaves consistency", msg);
                     } else {
-                        report.ok(format!("Leaves consistency: {}/{} rows OK", leaves.len(), expected.len()));
+                        report.ok(format!(
+                            "Leaves consistency: {}/{} rows OK",
+                            leaves.len(),
+                            expected.len()
+                        ));
                     }
                 }
             }
@@ -387,10 +382,8 @@ fn verify(
         match container.read_bytes("hashes/merkle_tree.bin") {
             Ok(blob) => match parse_and_validate_merkle_tree(&blob) {
                 Ok(tree) => {
-                    let map_leaves: Vec<String> = chunks
-                        .iter()
-                        .map(|c| c.plaintext_sha256.clone())
-                        .collect();
+                    let map_leaves: Vec<String> =
+                        chunks.iter().map(|c| c.plaintext_sha256.clone()).collect();
 
                     if tree.leaf_count as usize != map_leaves.len() {
                         report.fail(
@@ -436,10 +429,8 @@ fn verify(
         if let Some(proof_chunk_ref) = proof_chunk_arg {
             match resolve_chunk_ref(proof_chunk_ref, &chunks) {
                 Some(chunk) => {
-                    let leaves: Vec<String> = chunks
-                        .iter()
-                        .map(|c| c.plaintext_sha256.clone())
-                        .collect();
+                    let leaves: Vec<String> =
+                        chunks.iter().map(|c| c.plaintext_sha256.clone()).collect();
                     match generate_merkle_proof(&leaves, chunk.sequence) {
                         Ok(proof) => {
                             match verify_merkle_proof(
@@ -459,7 +450,10 @@ fn verify(
                                 }
                                 Ok(false) => report.fail(
                                     "Merkle proof verification",
-                                    format!("proof verification failed for chunk {}", chunk.sequence),
+                                    format!(
+                                        "proof verification failed for chunk {}",
+                                        chunk.sequence
+                                    ),
                                 ),
                                 Err(e) => report.fail("Merkle proof verification", e.to_string()),
                             }
@@ -584,7 +578,10 @@ fn includes_schemas(profile: VerifyProfile) -> bool {
 }
 
 fn includes_extensions(profile: VerifyProfile) -> bool {
-    matches!(profile, VerifyProfile::CoreExtensions | VerifyProfile::Conformance)
+    matches!(
+        profile,
+        VerifyProfile::CoreExtensions | VerifyProfile::Conformance
+    )
 }
 
 fn run_provenance_schema_checks(content: &str, report: &mut VerifyReport) {
@@ -629,7 +626,10 @@ fn run_provenance_schema_checks(content: &str, report: &mut VerifyReport) {
         }
 
         for required in ["timestamp", "actor", "action"] {
-            if get_str(required).map(|s| s.trim().is_empty()).unwrap_or(true) {
+            if get_str(required)
+                .map(|s| s.trim().is_empty())
+                .unwrap_or(true)
+            {
                 report.fail(
                     "Provenance schema",
                     format!("missing/empty {required} for event_id '{event_id}'"),
@@ -697,7 +697,10 @@ fn run_extension_checks(
     report: &mut VerifyReport,
 ) {
     let Some(manifest_obj) = manifest_value.and_then(|v| v.as_object()) else {
-        report.warn("Extensions", "manifest object unavailable for extension checks");
+        report.warn(
+            "Extensions",
+            "manifest object unavailable for extension checks",
+        );
         return;
     };
 
@@ -709,7 +712,10 @@ fn run_extension_checks(
     let mut paths = Vec::new();
     collect_string_paths(ext, &mut paths);
     if paths.is_empty() {
-        report.warn("Extensions", "extensions block present but no file paths found");
+        report.warn(
+            "Extensions",
+            "extensions block present but no file paths found",
+        );
         return;
     }
 
@@ -723,7 +729,10 @@ fn run_extension_checks(
     }
 
     if missing.is_empty() {
-        report.ok(format!("Extensions: {} referenced file(s) present", paths.len()));
+        report.ok(format!(
+            "Extensions: {} referenced file(s) present",
+            paths.len()
+        ));
     } else {
         report.fail(
             "Extensions",
@@ -783,7 +792,10 @@ fn parse_subset(arg: Option<&str>) -> Option<(HashSet<String>, HashSet<u64>)> {
     Some((ids, seqs))
 }
 
-fn resolve_chunk_ref<'a>(chunk_ref: &str, chunks: &'a [offf_core::types::ChunkMetadata]) -> Option<&'a offf_core::types::ChunkMetadata> {
+fn resolve_chunk_ref<'a>(
+    chunk_ref: &str,
+    chunks: &'a [offf_core::types::ChunkMetadata],
+) -> Option<&'a offf_core::types::ChunkMetadata> {
     if chunk_ref.starts_with("sha256:") {
         chunks.iter().find(|c| c.chunk_id == chunk_ref)
     } else {

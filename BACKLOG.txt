@@ -85,11 +85,15 @@ P0 - Direct oppakken
   - Done: 2026-05-24
   - Progress: `offf-access-service` ondersteunt nu `OFFF_AUTH_MODE` met mode-specifieke trusted identity headers/metadata (`dev_headers`, `jwt`, `mtls`), logt denied write attempts append-only naar `extensions/access/denied_access_events.jsonl`, en hardent write targets naar `analysis/jobs/{job_id}/...` met traversal- en overwrite-blokkering. gRPC smoke-tests zijn bijgewerkt en valideren denied overwrite logging
 
-- [ ] Hardening Sprint 8: CI + CLI E2E + negative conformance datasets (P0)
+- [x] Hardening Sprint 8: CI + CLI E2E + negative conformance datasets (P0)
   - Enforce `cargo fmt --check`
   - Enforce `cargo clippy --workspace --all-targets -- -D warnings`
   - Enforce `cargo test --workspace` and release build
   - Add end-to-end CLI workflows and negative datasets with machine-readable outcomes
+  - Added: 2026-05-24
+  - Status: done
+  - Done: 2026-05-24
+  - Progress: `.github/workflows/offf-ci.yml` bevat nu harde quality gates (`fmt`, strikte `clippy`, volledige workspace tests en release build), plus aparte jobs voor conformance en lokale CLI E2E met artifact upload van JSON-rapporten. `tests/e2e/run_cli_e2e.py` voegt een lokale convert->verify->keyword->yara keten toe met machine-readable output (`tests/e2e/cli-e2e-report.json`). Conformance negatieve scenario's zijn dataset-gedreven gemaakt via `tests/conformance/negative_cases.json` en worden machine-readable gerapporteerd
 
 P1 - Daarna
 -----------

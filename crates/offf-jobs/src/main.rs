@@ -95,16 +95,27 @@ enum Command {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Command::CreateKeyword { case, keywords, encoding, chunks, output } => {
-            cmd_create_keyword(&case, &keywords, &encoding, &chunks, &output)
-        }
-        Command::CreateYara { case, rules, chunks, output } => {
-            cmd_create_yara(&case, &rules, &chunks, &output)
-        }
+        Command::CreateKeyword {
+            case,
+            keywords,
+            encoding,
+            chunks,
+            output,
+        } => cmd_create_keyword(&case, &keywords, &encoding, &chunks, &output),
+        Command::CreateYara {
+            case,
+            rules,
+            chunks,
+            output,
+        } => cmd_create_yara(&case, &rules, &chunks, &output),
         Command::List { container } => cmd_list(&container),
-        Command::Run { case, job, worker_id, max_retries, force } => {
-            cmd_run(&case, &job, &worker_id, max_retries, force)
-        }
+        Command::Run {
+            case,
+            job,
+            worker_id,
+            max_retries,
+            force,
+        } => cmd_run(&case, &job, &worker_id, max_retries, force),
     }
 }
 
@@ -156,25 +167,36 @@ struct WorkerHealthEvent {
 // ── offf-jobs create-keyword ──────────────────────────────────────────────────
 
 fn cmd_create_keyword(
-    case: &PathBuf,
+    case: &Path,
     keywords_csv: &str,
     encoding_csv: &str,
     chunks_arg: &str,
-    output: &PathBuf,
+    output: &Path,
 ) -> Result<()> {
     let (case_id, chunk_ids) = resolve_case(case, chunks_arg)?;
 
     let job_id = format!("job-{}", uuid::Uuid::new_v4());
-    let keywords: Vec<String> = keywords_csv.split(',').map(|s| s.trim().to_string()).collect();
-    let encodings: Vec<String> = encoding_csv.split(',').map(|s| s.trim().to_string()).collect();
+    let keywords: Vec<String> = keywords_csv
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .collect();
+    let encodings: Vec<String> = encoding_csv
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .collect();
 
     let manifest = JobManifest {
         job_id: job_id.clone(),
         created_at: Utc::now(),
         case_id,
         task: "keyword_scan".to_string(),
-        scope: JobScope { chunks: chunk_ids.clone() },
-        tool: ToolInfo { name: "offf-keyword-worker".to_string(), version: TOOL_VERSION.to_string() },
+        scope: JobScope {
+            chunks: chunk_ids.clone(),
+        },
+        tool: ToolInfo {
+            name: "offf-keyword-worker".to_string(),
+            version: TOOL_VERSION.to_string(),
+        },
         parameters: serde_json::json!({
             "keywords": keywords,
             "encoding": encodings,
@@ -195,20 +217,16 @@ fn cmd_create_keyword(
 
 // ── offf-jobs create-yara ─────────────────────────────────────────────────────
 
-fn cmd_create_yara(
-    case: &PathBuf,
-    rules_path: &PathBuf,
-    chunks_arg: &str,
-    output: &PathBuf,
-) -> Result<()> {
+fn cmd_create_yara(case: &Path, rules_path: &Path, chunks_arg: &str, output: &Path) -> Result<()> {
     let (case_id, chunk_ids) = resolve_case(case, chunks_arg)?;
 
     // Read and hash the rules file (strip UTF-8 BOM if present)
     let rules_raw = fs::read(rules_path)
         .with_context(|| format!("cannot read rules file: {}", rules_path.display()))?;
-    let rules_bytes = rules_raw.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&rules_raw);
-    let rules_text = std::str::from_utf8(rules_bytes)
-        .context("rules file is not valid UTF-8")?;
+    let rules_bytes = rules_raw
+        .strip_prefix(b"\xEF\xBB\xBF")
+        .unwrap_or(&rules_raw);
+    let rules_text = std::str::from_utf8(rules_bytes).context("rules file is not valid UTF-8")?;
     let rules_hash = hex_sha256(rules_bytes);
 
     let job_id = format!("job-{}", uuid::Uuid::new_v4());
@@ -218,8 +236,13 @@ fn cmd_create_yara(
         created_at: Utc::now(),
         case_id,
         task: "yara_scan".to_string(),
-        scope: JobScope { chunks: chunk_ids.clone() },
-        tool: ToolInfo { name: "offf-yara-worker".to_string(), version: TOOL_VERSION.to_string() },
+        scope: JobScope {
+            chunks: chunk_ids.clone(),
+        },
+        tool: ToolInfo {
+            name: "offf-yara-worker".to_string(),
+            version: TOOL_VERSION.to_string(),
+        },
         parameters: serde_json::json!({
             "rules_path": rules_path.display().to_string(),
             "rules_hash": format!("sha256:{rules_hash}"),
@@ -241,7 +264,7 @@ fn cmd_create_yara(
 
 // ── offf-jobs list ────────────────────────────────────────────────────────────
 
-fn cmd_list(container: &PathBuf) -> Result<()> {
+fn cmd_list(container: &Path) -> Result<()> {
     let jobs_dir = container.join("jobs");
     if !jobs_dir.exists() {
         println!("No jobs directory found in container.");
@@ -259,12 +282,17 @@ fn cmd_list(container: &PathBuf) -> Result<()> {
         return Ok(());
     }
 
-    println!("{:<40}  {:<16}  {}", "job_id", "task", "created_at");
+    println!("{:<40}  {:<16}  created_at", "job_id", "task");
     println!("{}", "-".repeat(80));
     for entry in entries {
         let raw = fs::read_to_string(entry.path())?;
         if let Ok(m) = serde_json::from_str::<JobManifest>(&raw) {
-            println!("{:<40}  {:<16}  {}", m.job_id, m.task, m.created_at.to_rfc3339());
+            println!(
+                "{:<40}  {:<16}  {}",
+                m.job_id,
+                m.task,
+                m.created_at.to_rfc3339()
+            );
         }
     }
 
@@ -272,8 +300,8 @@ fn cmd_list(container: &PathBuf) -> Result<()> {
 }
 
 fn cmd_run(
-    case: &PathBuf,
-    job_path: &PathBuf,
+    case: &Path,
+    job_path: &Path,
     worker_id: &str,
     max_retries: u32,
     force: bool,
@@ -420,7 +448,12 @@ struct RunOutcome {
     error_message: String,
 }
 
-fn run_worker_task(task: &str, case: &Path, job_path: &Path, worker_id: &str) -> Result<RunOutcome> {
+fn run_worker_task(
+    task: &str,
+    case: &Path,
+    job_path: &Path,
+    worker_id: &str,
+) -> Result<RunOutcome> {
     let package = match task {
         "keyword_scan" => "offf-keyword-worker",
         "yara_scan" => "offf-yara-worker",
@@ -510,7 +543,7 @@ fn append_jsonl<T: Serialize>(path: &Path, event: &T) -> Result<()> {
 
 /// Load case_id from manifest and resolve the chunk scope.
 /// Returns (case_id, Vec<chunk_ids>).
-fn resolve_case(case: &PathBuf, chunks_arg: &str) -> Result<(String, Vec<String>)> {
+fn resolve_case(case: &Path, chunks_arg: &str) -> Result<(String, Vec<String>)> {
     let manifest_raw = fs::read_to_string(case.join("manifest.json"))
         .context("manifest.json not found – is this an OFFF container?")?;
     let manifest: ManifestJson = serde_json::from_str(&manifest_raw)?;
@@ -521,7 +554,10 @@ fn resolve_case(case: &PathBuf, chunks_arg: &str) -> Result<(String, Vec<String>
             .context("failed to read physical_to_chunk.parquet")?;
         chunks.into_iter().map(|c| c.chunk_id).collect()
     } else {
-        chunks_arg.split(',').map(|s| s.trim().to_string()).collect()
+        chunks_arg
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .collect()
     };
 
     Ok((manifest.container_id, chunk_ids))
@@ -529,7 +565,7 @@ fn resolve_case(case: &PathBuf, chunks_arg: &str) -> Result<(String, Vec<String>
 
 /// Write the job manifest both to the output path and into the container's
 /// `jobs/` directory.
-fn write_manifest(case: &PathBuf, manifest: &JobManifest, output: &PathBuf) -> Result<()> {
+fn write_manifest(case: &Path, manifest: &JobManifest, output: &Path) -> Result<()> {
     let json = serde_json::to_string_pretty(manifest)?;
 
     // Write to requested output path
@@ -567,8 +603,13 @@ mod tests {
             created_at: Utc::now(),
             case_id: "urn:offf:case:test".to_string(),
             task: "keyword_scan".to_string(),
-            scope: JobScope { chunks: vec!["*".to_string()] },
-            tool: ToolInfo { name: "t".to_string(), version: "1".to_string() },
+            scope: JobScope {
+                chunks: vec!["*".to_string()],
+            },
+            tool: ToolInfo {
+                name: "t".to_string(),
+                version: "1".to_string(),
+            },
             parameters: serde_json::json!({"k": ["x"]}),
         };
         let raw = serde_json::to_string(&job).unwrap();
@@ -581,8 +622,17 @@ mod tests {
 
     #[test]
     fn failure_transitions_to_terminal_after_last_attempt() {
-        assert_eq!(terminal_status_for_failure(1, 2), JobRuntimeStatus::RetryScheduled);
-        assert_eq!(terminal_status_for_failure(2, 2), JobRuntimeStatus::RetryScheduled);
-        assert_eq!(terminal_status_for_failure(3, 2), JobRuntimeStatus::FailedTerminal);
+        assert_eq!(
+            terminal_status_for_failure(1, 2),
+            JobRuntimeStatus::RetryScheduled
+        );
+        assert_eq!(
+            terminal_status_for_failure(2, 2),
+            JobRuntimeStatus::RetryScheduled
+        );
+        assert_eq!(
+            terminal_status_for_failure(3, 2),
+            JobRuntimeStatus::FailedTerminal
+        );
     }
 }

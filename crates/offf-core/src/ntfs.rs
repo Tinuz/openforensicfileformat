@@ -13,10 +13,7 @@
 //! 5. Build full paths by following parent directory references.
 //! 6. Return one [`FileIndexRow`] per entry.
 
-use std::{
-    collections::HashMap,
-    path::Path,
-};
+use std::{collections::HashMap, path::Path};
 
 use chrono::{DateTime, TimeZone, Utc};
 use serde_json::json;
@@ -32,8 +29,6 @@ use crate::{
 
 #[derive(Debug)]
 struct NtfsVbr {
-    bytes_per_sector: u64,
-    sectors_per_cluster: u64,
     bytes_per_cluster: u64,
     bytes_per_record: u64,
     mft_lcn: u64,
@@ -81,8 +76,6 @@ fn parse_vbr(data: &[u8]) -> Result<NtfsVbr, OfffError> {
     let mft_lcn = u64::from_le_bytes(data[48..56].try_into().unwrap());
 
     Ok(NtfsVbr {
-        bytes_per_sector,
-        sectors_per_cluster,
         bytes_per_cluster,
         bytes_per_record,
         mft_lcn,
@@ -127,7 +120,10 @@ fn parse_data_runs(buf: &[u8]) -> Vec<DataRun> {
 
         if off_len == 0 {
             // Sparse run
-            runs.push(DataRun { lcn_start: -1, cluster_count });
+            runs.push(DataRun {
+                lcn_start: -1,
+                cluster_count,
+            });
         } else {
             // LCN delta (signed, sign-extended from off_len bytes)
             let mut lcn_delta = 0i64;
@@ -141,7 +137,10 @@ fn parse_data_runs(buf: &[u8]) -> Vec<DataRun> {
             }
             pos += off_len;
             current_lcn += lcn_delta;
-            runs.push(DataRun { lcn_start: current_lcn, cluster_count });
+            runs.push(DataRun {
+                lcn_start: current_lcn,
+                cluster_count,
+            });
         }
     }
 
@@ -210,7 +209,6 @@ struct FileName {
 }
 
 struct MftRecord {
-    mft_entry: u64,
     flags: u16, // bit0=in-use, bit1=directory
     std_info: Option<StdInfo>,
     file_names: Vec<FileName>,
@@ -280,14 +278,18 @@ fn parse_file_name(content: &[u8]) -> Option<FileName> {
         .collect();
     let name = String::from_utf16_lossy(&chars).to_owned();
 
-    Some(FileName { parent_mft, name, namespace, real_size })
+    Some(FileName {
+        parent_mft,
+        name,
+        namespace,
+        real_size,
+    })
 }
 
 // ── MFT record parser ─────────────────────────────────────────────────────────
 
-fn parse_mft_record(raw: &[u8], entry_num: u64, record_size: usize) -> MftRecord {
+fn parse_mft_record(raw: &[u8], record_size: usize) -> MftRecord {
     let mut rec = MftRecord {
-        mft_entry: entry_num,
         flags: 0,
         std_info: None,
         file_names: Vec::new(),
@@ -318,8 +320,7 @@ fn parse_mft_record(raw: &[u8], entry_num: u64, record_size: usize) -> MftRecord
         if attr_type == 0xFFFF_FFFF {
             break; // end-of-attributes marker
         }
-        let attr_len =
-            u32::from_le_bytes(data[pos + 4..pos + 8].try_into().unwrap()) as usize;
+        let attr_len = u32::from_le_bytes(data[pos + 4..pos + 8].try_into().unwrap()) as usize;
         if attr_len == 0 || pos + attr_len > end {
             break;
         }
@@ -328,16 +329,13 @@ fn parse_mft_record(raw: &[u8], entry_num: u64, record_size: usize) -> MftRecord
 
         match attr_type {
             // $STANDARD_INFORMATION
-            0x10 => {
-                if !non_resident && pos + 22 <= end {
-                    let c_len =
-                        u32::from_le_bytes(data[pos + 16..pos + 20].try_into().unwrap()) as usize;
-                    let c_off =
-                        u16::from_le_bytes(data[pos + 20..pos + 22].try_into().unwrap()) as usize;
-                    if pos + c_off + c_len <= end {
-                        rec.std_info =
-                            parse_std_info(&data[pos + c_off..pos + c_off + c_len]);
-                    }
+            0x10 if !non_resident && pos + 22 <= end => {
+                let c_len =
+                    u32::from_le_bytes(data[pos + 16..pos + 20].try_into().unwrap()) as usize;
+                let c_off =
+                    u16::from_le_bytes(data[pos + 20..pos + 22].try_into().unwrap()) as usize;
+                if pos + c_off + c_len <= end {
+                    rec.std_info = parse_std_info(&data[pos + c_off..pos + c_off + c_len]);
                 }
             }
             // $ATTRIBUTE_LIST – flag for partial parse
@@ -345,18 +343,15 @@ fn parse_mft_record(raw: &[u8], entry_num: u64, record_size: usize) -> MftRecord
                 rec.has_attr_list = true;
             }
             // $FILE_NAME
-            0x30 => {
-                if !non_resident && pos + 22 <= end {
-                    let c_len =
-                        u32::from_le_bytes(data[pos + 16..pos + 20].try_into().unwrap()) as usize;
-                    let c_off =
-                        u16::from_le_bytes(data[pos + 20..pos + 22].try_into().unwrap()) as usize;
-                    if pos + c_off + c_len <= end {
-                        if let Some(fn_attr) =
-                            parse_file_name(&data[pos + c_off..pos + c_off + c_len])
-                        {
-                            rec.file_names.push(fn_attr);
-                        }
+            0x30 if !non_resident && pos + 22 <= end => {
+                let c_len =
+                    u32::from_le_bytes(data[pos + 16..pos + 20].try_into().unwrap()) as usize;
+                let c_off =
+                    u16::from_le_bytes(data[pos + 20..pos + 22].try_into().unwrap()) as usize;
+                if pos + c_off + c_len <= end {
+                    if let Some(fn_attr) = parse_file_name(&data[pos + c_off..pos + c_off + c_len])
+                    {
+                        rec.file_names.push(fn_attr);
                     }
                 }
             }
@@ -367,9 +362,8 @@ fn parse_mft_record(raw: &[u8], entry_num: u64, record_size: usize) -> MftRecord
                 if name_len == 0 {
                     if non_resident {
                         if pos + 64 <= end {
-                            rec.data_size = u64::from_le_bytes(
-                                data[pos + 56..pos + 64].try_into().unwrap(),
-                            );
+                            rec.data_size =
+                                u64::from_le_bytes(data[pos + 56..pos + 64].try_into().unwrap());
                             let rl_off =
                                 u16::from_le_bytes(data[pos + 32..pos + 34].try_into().unwrap())
                                     as usize;
@@ -379,9 +373,8 @@ fn parse_mft_record(raw: &[u8], entry_num: u64, record_size: usize) -> MftRecord
                             }
                         }
                     } else if pos + 20 <= end {
-                        rec.data_size = u32::from_le_bytes(
-                            data[pos + 16..pos + 20].try_into().unwrap(),
-                        ) as u64;
+                        rec.data_size =
+                            u32::from_le_bytes(data[pos + 16..pos + 20].try_into().unwrap()) as u64;
                     }
                 }
             }
@@ -432,7 +425,11 @@ struct ChunkCache<'a> {
 
 impl<'a> ChunkCache<'a> {
     fn new(base: &'a Path, chunks: &'a [ChunkMetadata]) -> Self {
-        Self { base, chunks, cache: HashMap::new() }
+        Self {
+            base,
+            chunks,
+            cache: HashMap::new(),
+        }
     }
 
     fn read_at(&mut self, offset: u64, length: u64) -> Result<Vec<u8>, OfffError> {
@@ -514,8 +511,7 @@ fn read_mft(
         if attr_type == 0xFFFF_FFFF {
             break;
         }
-        let attr_len =
-            u32::from_le_bytes(rec0[pos + 4..pos + 8].try_into().unwrap()) as usize;
+        let attr_len = u32::from_le_bytes(rec0[pos + 4..pos + 8].try_into().unwrap()) as usize;
         if attr_len == 0 || pos + attr_len > rec0.len() {
             break;
         }
@@ -523,10 +519,8 @@ fn read_mft(
         if attr_type == 0x80 && rec0[pos + 8] != 0 {
             // Non-resident $DATA
             if pos + 64 <= rec0.len() {
-                mft_allocated =
-                    u64::from_le_bytes(rec0[pos + 40..pos + 48].try_into().unwrap());
-                mft_real_size =
-                    u64::from_le_bytes(rec0[pos + 56..pos + 64].try_into().unwrap());
+                mft_allocated = u64::from_le_bytes(rec0[pos + 40..pos + 48].try_into().unwrap());
+                mft_real_size = u64::from_le_bytes(rec0[pos + 56..pos + 64].try_into().unwrap());
                 let rl_off =
                     u16::from_le_bytes(rec0[pos + 32..pos + 34].try_into().unwrap()) as usize;
                 if pos + rl_off < rec0.len() {
@@ -667,7 +661,7 @@ pub fn index_ntfs(
         if &slice[..4] != b"FILE" {
             continue; // unallocated slot
         }
-        let rec = parse_mft_record(slice, i as u64, rec_size);
+        let rec = parse_mft_record(slice, rec_size);
         record_map.insert(i as u64, rec);
     }
 
@@ -729,11 +723,13 @@ pub fn index_ntfs(
             .collect();
         chunk_ref_set.sort_unstable();
         chunk_ref_set.dedup();
-        let chunk_refs_json =
-            serde_json::to_string(&chunk_ref_set).unwrap_or_else(|_| "[]".into());
+        let chunk_refs_json = serde_json::to_string(&chunk_ref_set).unwrap_or_else(|_| "[]".into());
 
         let (parser_status, parser_error) = if rec.parse_error.is_some() {
-            ("error".to_string(), rec.parse_error.clone().unwrap_or_default())
+            (
+                "error".to_string(),
+                rec.parse_error.clone().unwrap_or_default(),
+            )
         } else if rec.has_attr_list {
             (
                 "partial".to_string(),
@@ -843,7 +839,7 @@ mod tests {
         rec[48..50].copy_from_slice(&usn.to_le_bytes()); // USN
         rec[50..52].copy_from_slice(&0x1111u16.to_le_bytes()); // saved sector 0
         rec[52..54].copy_from_slice(&0x2222u16.to_le_bytes()); // saved sector 1
-        // Place USN at end of each 512-byte sector
+                                                               // Place USN at end of each 512-byte sector
         rec[510..512].copy_from_slice(&usn.to_le_bytes());
         rec[1022..1024].copy_from_slice(&usn.to_le_bytes());
 

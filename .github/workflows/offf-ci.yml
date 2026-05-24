@@ -7,7 +7,7 @@ on:
       - main
 
 jobs:
-  rust-check:
+  rust-quality-gates:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -16,14 +16,41 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cargo check workspace
-        run: cargo check --workspace
+      - name: Cargo fmt check
+        run: cargo fmt --check
 
-      - name: Run core tests
-        run: cargo test -p offf-core -- --nocapture
+      - name: Cargo clippy strict
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: Run gRPC smoke test
-        run: cargo test -p offf-access-service --test grpc_smoke -- --nocapture
+      - name: Cargo test workspace
+        run: cargo test --workspace -- --nocapture
+
+      - name: Cargo build release
+        run: cargo build --workspace --release
+
+  cli-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run CLI E2E workflow
+        run: python tests/e2e/run_cli_e2e.py
+
+      - name: Upload CLI E2E report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-e2e-report
+          path: tests/e2e/cli-e2e-report.json
 
   python-sdk-contract:
     runs-on: ubuntu-latest
@@ -103,3 +130,10 @@ jobs:
 
       - name: Run conformance scaffold
         run: python tests/conformance/run_conformance.py
+
+      - name: Upload conformance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-report
+          path: tests/conformance/conformance-report.json

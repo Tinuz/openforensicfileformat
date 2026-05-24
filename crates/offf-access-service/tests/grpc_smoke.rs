@@ -1,7 +1,7 @@
 use std::{
     fs,
-    net::TcpListener,
     io::Read,
+    net::TcpListener,
     path::Path,
     process::{Child, Command, Stdio},
     time::Duration,
@@ -41,10 +41,10 @@ async fn grpc_smoke_all_methods() {
     let root = tmp.path().to_path_buf();
 
     let fixture = build_case_fixture(&root).expect("build fixture");
-        let registry_path = root.join("tool-registry.json");
-        fs::write(
-                &registry_path,
-                r#"{
+    let registry_path = root.join("tool-registry.json");
+    fs::write(
+        &registry_path,
+        r#"{
     "tools": [
         {
             "tool_id": "grpc-smoke-test",
@@ -54,8 +54,8 @@ async fn grpc_smoke_all_methods() {
         }
     ]
 }"#,
-        )
-        .expect("write registry fixture");
+    )
+    .expect("write registry fixture");
     let rest_port = pick_free_port().expect("rest port");
     let grpc_port = pick_free_port().expect("grpc port");
 
@@ -80,9 +80,7 @@ async fn grpc_smoke_all_methods() {
                 if let Some(mut stderr) = child.stderr.take() {
                     let _ = stderr.read_to_string(&mut stderr_text);
                 }
-                panic!(
-                    "access service exited early with status {status}; stderr:\n{stderr_text}"
-                );
+                panic!("access service exited early with status {status}; stderr:\n{stderr_text}");
             }
 
             match OfffAccessServiceClient::connect(endpoint.clone()).await {
@@ -173,13 +171,15 @@ async fn grpc_smoke_all_methods() {
     assert!(artifacts_before.paths.is_empty());
 
     let write = client
-        .write_analysis_results(with_auth(tonic::Request::new(WriteAnalysisResultsRequest {
-            case_id: fixture.case_id.clone(),
-            relative_path: "analysis/jobs/grpc-smoke-job/grpc_smoke_hits.jsonl".to_string(),
-            rows: vec![AnalysisRow {
-                json: json!({"k": "v", "n": 1}).to_string(),
-            }],
-        })))
+        .write_analysis_results(with_auth(tonic::Request::new(
+            WriteAnalysisResultsRequest {
+                case_id: fixture.case_id.clone(),
+                relative_path: "analysis/jobs/grpc-smoke-job/grpc_smoke_hits.jsonl".to_string(),
+                rows: vec![AnalysisRow {
+                    json: json!({"k": "v", "n": 1}).to_string(),
+                }],
+            },
+        )))
         .await
         .expect("WriteAnalysisResults")
         .into_inner();
@@ -198,13 +198,15 @@ async fn grpc_smoke_all_methods() {
         .any(|p| p.ends_with("analysis/jobs/grpc-smoke-job/grpc_smoke_hits.jsonl")));
 
     let write_denied = client
-        .write_analysis_results(with_auth(tonic::Request::new(WriteAnalysisResultsRequest {
-            case_id: fixture.case_id.clone(),
-            relative_path: "analysis/jobs/grpc-smoke-job/grpc_smoke_hits.jsonl".to_string(),
-            rows: vec![AnalysisRow {
-                json: json!({"k": "v2"}).to_string(),
-            }],
-        })))
+        .write_analysis_results(with_auth(tonic::Request::new(
+            WriteAnalysisResultsRequest {
+                case_id: fixture.case_id.clone(),
+                relative_path: "analysis/jobs/grpc-smoke-job/grpc_smoke_hits.jsonl".to_string(),
+                rows: vec![AnalysisRow {
+                    json: json!({"k": "v2"}).to_string(),
+                }],
+            },
+        )))
         .await
         .expect_err("second write should be denied");
     assert_eq!(write_denied.code(), tonic::Code::PermissionDenied);
@@ -219,14 +221,16 @@ async fn grpc_smoke_all_methods() {
     assert!(denied_log.contains("grpc_write_analysis_results"));
 
     let appended = client
-        .append_provenance_event(with_auth(tonic::Request::new(AppendProvenanceEventRequest {
-            case_id: fixture.case_id,
-            action: "grpc_smoke".to_string(),
-            actor: "test-runner".to_string(),
-            details_json: json!({"scope": "smoke"}).to_string(),
-            tool_name: "grpc-test".to_string(),
-            tool_version: "0.1.0".to_string(),
-        })))
+        .append_provenance_event(with_auth(tonic::Request::new(
+            AppendProvenanceEventRequest {
+                case_id: fixture.case_id,
+                action: "grpc_smoke".to_string(),
+                actor: "test-runner".to_string(),
+                details_json: json!({"scope": "smoke"}).to_string(),
+                tool_name: "grpc-test".to_string(),
+                tool_version: "0.1.0".to_string(),
+            },
+        )))
         .await
         .expect("AppendProvenanceEvent")
         .into_inner();
@@ -245,13 +249,7 @@ fn build_case_fixture(root: &Path) -> Result<Fixture, Box<dyn std::error::Error>
     let case_path = root.join(&case_id);
     fs::create_dir_all(&case_path)?;
 
-    let chunk = write_chunk(
-        &case_path,
-        0,
-        0,
-        b"grpc smoke chunk",
-        &Compression::None,
-    )?;
+    let chunk = write_chunk(&case_path, 0, 0, b"grpc smoke chunk", &Compression::None)?;
 
     let map_path = case_path.join("maps").join("physical_to_chunk.parquet");
     write_physical_to_chunk(&map_path, std::slice::from_ref(&chunk))?;
@@ -319,7 +317,10 @@ fn build_case_fixture(root: &Path) -> Result<Fixture, Box<dyn std::error::Error>
 
     fs::create_dir_all(case_path.join("analysis"))?;
     fs::create_dir_all(case_path.join("provenance"))?;
-    fs::write(case_path.join("provenance").join("chain_of_custody.jsonl"), "")?;
+    fs::write(
+        case_path.join("provenance").join("chain_of_custody.jsonl"),
+        "",
+    )?;
 
     Ok(Fixture {
         case_id,

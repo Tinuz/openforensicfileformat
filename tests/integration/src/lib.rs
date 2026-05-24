@@ -1,3 +1,6 @@
+#![allow(dead_code, unused_imports)]
+#![allow(clippy::explicit_counter_loop, clippy::identity_op)]
+
 /// Integration tests for the OFFF Evidence Container MVP.
 ///
 /// Each test generates a synthetic raw image, converts it to OFFF, verifies
@@ -162,10 +165,9 @@ fn convert_image(
 
 /// Reconstruct a raw image from an OFFF container and return the output path.
 fn export_image(container: &Path, out: &Path) -> String {
-    let manifest: ManifestJson = serde_json::from_str(
-        &fs::read_to_string(container.join("manifest.json")).unwrap(),
-    )
-    .unwrap();
+    let manifest: ManifestJson =
+        serde_json::from_str(&fs::read_to_string(container.join("manifest.json")).unwrap())
+            .unwrap();
 
     let chunks =
         read_physical_to_chunk(&container.join(&manifest.indexes.physical_to_chunk)).unwrap();
@@ -229,7 +231,10 @@ fn non_aligned_image_round_trip() {
     );
 
     let exported_hash = export_image(&container, &reconstructed);
-    assert_eq!(original_hash, exported_hash, "non-aligned round-trip failed");
+    assert_eq!(
+        original_hash, exported_hash,
+        "non-aligned round-trip failed"
+    );
 }
 
 #[test]
@@ -243,7 +248,10 @@ fn compression_none_round_trip() {
     convert_image(&image, &container, 128 * 1024, Compression::None);
     let exported_hash = export_image(&container, &reconstructed);
 
-    assert_eq!(original_hash, exported_hash, "no-compression round-trip failed");
+    assert_eq!(
+        original_hash, exported_hash,
+        "no-compression round-trip failed"
+    );
 }
 
 #[test]
@@ -262,10 +270,7 @@ fn verify_detects_chunk_corruption() {
 
     // Verification should detect it
     let result = verify_chunk(&container, &chunks[0]);
-    assert!(
-        result.is_err(),
-        "corrupted chunk should fail verification"
-    );
+    assert!(result.is_err(), "corrupted chunk should fail verification");
 }
 
 #[test]
@@ -276,10 +281,9 @@ fn merkle_root_matches_manifest() {
 
     let chunks = convert_image(&image, &container, 256 * 1024, Compression::Zstd);
 
-    let manifest: ManifestJson = serde_json::from_str(
-        &fs::read_to_string(container.join("manifest.json")).unwrap(),
-    )
-    .unwrap();
+    let manifest: ManifestJson =
+        serde_json::from_str(&fs::read_to_string(container.join("manifest.json")).unwrap())
+            .unwrap();
 
     // Recompute Merkle root from chunk metadata
     let leaves: Vec<String> = chunks.iter().map(|c| c.plaintext_sha256.clone()).collect();
@@ -422,8 +426,8 @@ fn make_gpt_image(dir: &Path, name: &str) -> PathBuf {
     disk[hdr_off + 48..hdr_off + 56].copy_from_slice(&(SECTORS - 34).to_le_bytes());
     // disk GUID (arbitrary)
     disk[hdr_off + 56..hdr_off + 72].copy_from_slice(&[
-        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-        0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+        0x10,
     ]);
     // partition entry start LBA = 2
     disk[hdr_off + 72..hdr_off + 80].copy_from_slice(&2u64.to_le_bytes());
@@ -436,8 +440,8 @@ fn make_gpt_image(dir: &Path, name: &str) -> PathBuf {
     // Entry 0: EFI System Partition {c12a7328-f81f-11d2-ba4b-00a0c93ec93b}
     let entry0_off = 2 * SECTOR;
     let efi_type: [u8; 16] = [
-        0x28, 0x73, 0x2a, 0xc1, 0x1f, 0xf8, 0xd2, 0x11,
-        0xba, 0x4b, 0x00, 0xa0, 0xc9, 0x3e, 0xc9, 0x3b,
+        0x28, 0x73, 0x2a, 0xc1, 0x1f, 0xf8, 0xd2, 0x11, 0xba, 0x4b, 0x00, 0xa0, 0xc9, 0x3e, 0xc9,
+        0x3b,
     ];
     disk[entry0_off..entry0_off + 16].copy_from_slice(&efi_type);
     // unique GUID (arbitrary)
@@ -446,20 +450,26 @@ fn make_gpt_image(dir: &Path, name: &str) -> PathBuf {
     disk[entry0_off + 32..entry0_off + 40].copy_from_slice(&2048u64.to_le_bytes());
     disk[entry0_off + 40..entry0_off + 48].copy_from_slice(&4095u64.to_le_bytes());
     // name "EFI" in UTF-16LE
-    let efi_name: Vec<u8> = "EFI\0".encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+    let efi_name: Vec<u8> = "EFI\0"
+        .encode_utf16()
+        .flat_map(|c| c.to_le_bytes())
+        .collect();
     disk[entry0_off + 56..entry0_off + 56 + efi_name.len()].copy_from_slice(&efi_name);
 
     // Entry 1: Basic Data Partition {ebd0a0a2-b9e5-4433-87c0-68b6b72699c7}
     let entry1_off = 2 * SECTOR + 128;
     let data_type: [u8; 16] = [
-        0xa2, 0xa0, 0xd0, 0xeb, 0xe5, 0xb9, 0x33, 0x44,
-        0x87, 0xc0, 0x68, 0xb6, 0xb7, 0x26, 0x99, 0xc7,
+        0xa2, 0xa0, 0xd0, 0xeb, 0xe5, 0xb9, 0x33, 0x44, 0x87, 0xc0, 0x68, 0xb6, 0xb7, 0x26, 0x99,
+        0xc7,
     ];
     disk[entry1_off..entry1_off + 16].copy_from_slice(&data_type);
     disk[entry1_off + 16..entry1_off + 32].copy_from_slice(&[0xBB; 16]);
     disk[entry1_off + 32..entry1_off + 40].copy_from_slice(&4096u64.to_le_bytes());
     disk[entry1_off + 40..entry1_off + 48].copy_from_slice(&6143u64.to_le_bytes());
-    let data_name: Vec<u8> = "Data\0".encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+    let data_name: Vec<u8> = "Data\0"
+        .encode_utf16()
+        .flat_map(|c| c.to_le_bytes())
+        .collect();
     disk[entry1_off + 56..entry1_off + 56 + data_name.len()].copy_from_slice(&data_name);
 
     let path = dir.join(name);
@@ -478,15 +488,11 @@ fn mbr_partition_table_detected() {
     // Use 1 MiB chunks so the first chunk definitely covers sectors 0–2048
     convert_image(&image, &container, 1024 * 1024, Compression::None);
 
-    let chunks = read_physical_to_chunk(
-        &container.join("maps/physical_to_chunk.parquet"),
-    )
-    .unwrap();
+    let chunks = read_physical_to_chunk(&container.join("maps/physical_to_chunk.parquet")).unwrap();
 
-    let manifest: ManifestJson = serde_json::from_str(
-        &fs::read_to_string(container.join("manifest.json")).unwrap(),
-    )
-    .unwrap();
+    let manifest: ManifestJson =
+        serde_json::from_str(&fs::read_to_string(container.join("manifest.json")).unwrap())
+            .unwrap();
 
     let table = detect_and_parse(
         &container,
@@ -508,7 +514,10 @@ fn mbr_partition_table_detected() {
     assert_eq!(p0.length, 2048 * 512);
     assert_eq!(p0.bootable, Some(true));
     assert!(p0.partition_type.contains("NTFS"));
-    assert!(!p0.chunk_refs.is_empty(), "partition 1 should reference at least one chunk");
+    assert!(
+        !p0.chunk_refs.is_empty(),
+        "partition 1 should reference at least one chunk"
+    );
 
     let p1 = &table.partitions[1];
     assert_eq!(p1.partition_id, "mbr-2");
@@ -545,21 +554,18 @@ fn mbr_indexing_does_not_modify_evidence() {
         .collect();
 
     // Run indexing
-    let chunks = read_physical_to_chunk(
-        &container.join("maps/physical_to_chunk.parquet"),
-    )
-    .unwrap();
-    let manifest: ManifestJson = serde_json::from_str(
-        &fs::read_to_string(container.join("manifest.json")).unwrap(),
-    )
-    .unwrap();
+    let chunks = read_physical_to_chunk(&container.join("maps/physical_to_chunk.parquet")).unwrap();
+    let manifest: ManifestJson =
+        serde_json::from_str(&fs::read_to_string(container.join("manifest.json")).unwrap())
+            .unwrap();
     detect_and_parse(&container, &chunks, 512, &manifest.container_id, "test").unwrap();
 
     // Verify chunk files are unchanged
     for (path, hash_before) in before {
         let hash_after = file_sha256(&path);
         assert_eq!(
-            hash_before, hash_after,
+            hash_before,
+            hash_after,
             "chunk file was modified by indexing: {}",
             path.display()
         );
@@ -576,14 +582,10 @@ fn gpt_partition_table_detected() {
 
     convert_image(&image, &container, 1024 * 1024, Compression::None);
 
-    let chunks = read_physical_to_chunk(
-        &container.join("maps/physical_to_chunk.parquet"),
-    )
-    .unwrap();
-    let manifest: ManifestJson = serde_json::from_str(
-        &fs::read_to_string(container.join("manifest.json")).unwrap(),
-    )
-    .unwrap();
+    let chunks = read_physical_to_chunk(&container.join("maps/physical_to_chunk.parquet")).unwrap();
+    let manifest: ManifestJson =
+        serde_json::from_str(&fs::read_to_string(container.join("manifest.json")).unwrap())
+            .unwrap();
 
     let table = detect_and_parse(
         &container,
@@ -628,14 +630,10 @@ fn gpt_partition_table_json_written() {
 
     convert_image(&image, &container, 1024 * 1024, Compression::None);
 
-    let chunks = read_physical_to_chunk(
-        &container.join("maps/physical_to_chunk.parquet"),
-    )
-    .unwrap();
-    let manifest: ManifestJson = serde_json::from_str(
-        &fs::read_to_string(container.join("manifest.json")).unwrap(),
-    )
-    .unwrap();
+    let chunks = read_physical_to_chunk(&container.join("maps/physical_to_chunk.parquet")).unwrap();
+    let manifest: ManifestJson =
+        serde_json::from_str(&fs::read_to_string(container.join("manifest.json")).unwrap())
+            .unwrap();
 
     let table = detect_and_parse(
         &container,
@@ -674,10 +672,7 @@ fn read_bytes_at_crosses_chunk_boundary() {
     let container = tmp.path().join("sectors.offf");
     convert_image(&path, &container, SS as u64, Compression::None);
 
-    let chunks = read_physical_to_chunk(
-        &container.join("maps/physical_to_chunk.parquet"),
-    )
-    .unwrap();
+    let chunks = read_physical_to_chunk(&container.join("maps/physical_to_chunk.parquet")).unwrap();
 
     // Read across the boundary between sector 0 and sector 1
     let data = read_bytes_at(&container, &chunks, SS as u64 - 4, 8).unwrap();
@@ -694,13 +689,14 @@ fn chunk_refs_cover_full_partition_range() {
     // Use 512 KiB chunks: partitions span two chunks each
     convert_image(&image, &container, 512 * 1024, Compression::None);
 
-    let chunks = read_physical_to_chunk(
-        &container.join("maps/physical_to_chunk.parquet"),
-    )
-    .unwrap();
+    let chunks = read_physical_to_chunk(&container.join("maps/physical_to_chunk.parquet")).unwrap();
 
     // Partition 1: LBA 2048–4095 = 1 MiB at offset 1 MiB
     let refs = chunk_refs_for_range(&chunks, 2048 * 512, 2048 * 512);
     // With 512 KiB chunks, 1 MiB partition = 2 chunks
-    assert_eq!(refs.len(), 2, "1 MiB partition should span 2 × 512 KiB chunks");
+    assert_eq!(
+        refs.len(),
+        2,
+        "1 MiB partition should span 2 × 512 KiB chunks"
+    );
 }

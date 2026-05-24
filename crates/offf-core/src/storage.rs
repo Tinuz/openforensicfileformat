@@ -3,11 +3,7 @@ use std::{fs, path::PathBuf};
 use aws_config::{BehaviorVersion, Region};
 use aws_sdk_s3::{primitives::ByteStream, Client};
 
-use crate::{
-    chunk::hex_sha256,
-    error::OfffError,
-    types::ChunkMetadata,
-};
+use crate::{chunk::hex_sha256, error::OfffError, types::ChunkMetadata};
 
 #[derive(Debug, Clone)]
 pub enum ContainerRef {
@@ -20,9 +16,15 @@ impl ContainerRef {
         if let Some(rest) = input.strip_prefix("s3://") {
             let mut parts = rest.splitn(2, '/');
             let bucket = parts.next().unwrap_or_default().to_string();
-            let prefix = parts.next().unwrap_or_default().trim_matches('/').to_string();
+            let prefix = parts
+                .next()
+                .unwrap_or_default()
+                .trim_matches('/')
+                .to_string();
             if bucket.is_empty() {
-                return Err(OfffError::InvalidContainer("missing S3 bucket in URI".to_string()));
+                return Err(OfffError::InvalidContainer(
+                    "missing S3 bucket in URI".to_string(),
+                ));
             }
             Ok(Self::S3 { bucket, prefix })
         } else {
@@ -65,18 +67,10 @@ impl ContainerRef {
                 let rt = tokio::runtime::Runtime::new().map_err(|e| {
                     OfffError::InvalidContainer(format!("failed to start async runtime: {e}"))
                 })?;
-                let out = rt.block_on(async {
-                    client
-                        .get_object()
-                        .bucket(bucket)
-                        .key(&key)
-                        .send()
-                        .await
-                });
+                let out = rt
+                    .block_on(async { client.get_object().bucket(bucket).key(&key).send().await });
                 let out = out.map_err(|e| {
-                    OfffError::InvalidContainer(format!(
-                        "failed to read s3://{bucket}/{key}: {e}"
-                    ))
+                    OfffError::InvalidContainer(format!("failed to read s3://{bucket}/{key}: {e}"))
                 })?;
                 let data = rt
                     .block_on(async { out.body.collect().await })
@@ -117,9 +111,7 @@ impl ContainerRef {
                         .await
                 })
                 .map_err(|e| {
-                    OfffError::InvalidContainer(format!(
-                        "failed to write s3://{bucket}/{key}: {e}"
-                    ))
+                    OfffError::InvalidContainer(format!("failed to write s3://{bucket}/{key}: {e}"))
                 })?;
                 Ok(())
             }
@@ -135,14 +127,8 @@ impl ContainerRef {
                 let rt = tokio::runtime::Runtime::new().map_err(|e| {
                     OfffError::InvalidContainer(format!("failed to start async runtime: {e}"))
                 })?;
-                let out = rt.block_on(async {
-                    client
-                        .head_object()
-                        .bucket(bucket)
-                        .key(&key)
-                        .send()
-                        .await
-                });
+                let out = rt
+                    .block_on(async { client.head_object().bucket(bucket).key(&key).send().await });
                 match out {
                     Ok(_) => Ok(true),
                     Err(e) => {
@@ -189,27 +175,22 @@ impl ContainerRef {
                 const MAX_ATTEMPTS: usize = 8;
                 for _ in 0..MAX_ATTEMPTS {
                     let get_out = rt.block_on(async {
-                        client
-                            .get_object()
-                            .bucket(bucket)
-                            .key(&key)
-                            .send()
-                            .await
+                        client.get_object().bucket(bucket).key(&key).send().await
                     });
 
                     match get_out {
                         Ok(obj) => {
                             let etag = obj.e_tag().unwrap_or_default().to_string();
-                            let bytes = rt.block_on(async { obj.body.collect().await }).map_err(|e| {
-                                OfffError::InvalidContainer(format!(
-                                    "failed to download s3://{bucket}/{key}: {e}"
-                                ))
-                            })?;
+                            let bytes =
+                                rt.block_on(async { obj.body.collect().await })
+                                    .map_err(|e| {
+                                        OfffError::InvalidContainer(format!(
+                                            "failed to download s3://{bucket}/{key}: {e}"
+                                        ))
+                                    })?;
                             let mut content = String::from_utf8(bytes.into_bytes().to_vec())
                                 .map_err(|e| {
-                                    OfffError::InvalidContainer(format!(
-                                        "{rel} is not UTF-8: {e}"
-                                    ))
+                                    OfffError::InvalidContainer(format!("{rel} is not UTF-8: {e}"))
                                 })?;
                             content.push_str(line);
                             content.push('\n');
@@ -237,7 +218,10 @@ impl ContainerRef {
                         }
                         Err(e) => {
                             let msg = e.to_string();
-                            if msg.contains("NoSuchKey") || msg.contains("NotFound") || msg.contains("404") {
+                            if msg.contains("NoSuchKey")
+                                || msg.contains("NotFound")
+                                || msg.contains("404")
+                            {
                                 let content = format!("{line}\n");
                                 let put = rt.block_on(async {
                                     client
@@ -297,10 +281,7 @@ impl ContainerRef {
                 let mut continuation: Option<String> = None;
                 let mut out = Vec::new();
                 loop {
-                    let mut req = client
-                        .list_objects_v2()
-                        .bucket(bucket)
-                        .prefix(&list_prefix);
+                    let mut req = client.list_objects_v2().bucket(bucket).prefix(&list_prefix);
                     if let Some(token) = continuation.as_deref() {
                         req = req.continuation_token(token);
                     }
@@ -327,9 +308,7 @@ impl ContainerRef {
                         }
                     }
 
-                    continuation = resp
-                        .next_continuation_token()
-                        .map(|s| s.to_string());
+                    continuation = resp.next_continuation_token().map(|s| s.to_string());
                     if continuation.is_none() {
                         break;
                     }
@@ -355,7 +334,9 @@ fn collect_local_relative(
         } else {
             let rel = path
                 .strip_prefix(base)
-                .map_err(|_| OfffError::InvalidContainer("failed to relativize local path".to_string()))?
+                .map_err(|_| {
+                    OfffError::InvalidContainer("failed to relativize local path".to_string())
+                })?
                 .to_string_lossy()
                 .replace('\\', "/");
             out.push(rel);
@@ -368,7 +349,10 @@ fn is_precondition_error(msg: &str) -> bool {
     msg.contains("PreconditionFailed") || msg.contains("condition") || msg.contains("412")
 }
 
-pub fn read_chunk_verified(container: &ContainerRef, meta: &ChunkMetadata) -> Result<Vec<u8>, OfffError> {
+pub fn read_chunk_verified(
+    container: &ContainerRef,
+    meta: &ChunkMetadata,
+) -> Result<Vec<u8>, OfffError> {
     let rel = chunk_relative_path(&meta.plaintext_sha256);
     let stored_bytes = container.read_bytes(&rel)?;
 
@@ -383,12 +367,12 @@ pub fn read_chunk_verified(container: &ContainerRef, meta: &ChunkMetadata) -> Re
 
     let plaintext: Vec<u8> = match meta.compression.as_str() {
         "none" => stored_bytes,
-        "zstd" => {
-            zstd::decode_all(stored_bytes.as_slice()).map_err(|e| OfffError::DecompressionError {
+        "zstd" => zstd::decode_all(stored_bytes.as_slice()).map_err(|e| {
+            OfffError::DecompressionError {
                 chunk_id: meta.chunk_id.clone(),
                 msg: e.to_string(),
-            })?
-        }
+            }
+        })?,
         other => {
             return Err(OfffError::InvalidManifest(format!(
                 "unknown compression '{other}'"
@@ -412,19 +396,18 @@ pub fn chunk_relative_path(plaintext_sha256: &str) -> String {
     let hex = plaintext_sha256
         .strip_prefix("sha256:")
         .unwrap_or(plaintext_sha256);
-    format!(
-        "chunks/sha256/{}/{}/{}.chunk",
-        &hex[..2],
-        &hex[2..4],
-        hex
-    )
+    format!("chunks/sha256/{}/{}/{}.chunk", &hex[..2], &hex[2..4], hex)
 }
 
 fn join_key(prefix: &str, rel: &str) -> String {
     if prefix.is_empty() {
         rel.trim_start_matches('/').to_string()
     } else {
-        format!("{}/{}", prefix.trim_matches('/'), rel.trim_start_matches('/'))
+        format!(
+            "{}/{}",
+            prefix.trim_matches('/'),
+            rel.trim_start_matches('/')
+        )
     }
 }
 
@@ -432,11 +415,11 @@ fn s3_client() -> Result<Client, OfffError> {
     let endpoint = std::env::var("OFFF_S3_ENDPOINT").ok();
     let region = std::env::var("AWS_REGION").unwrap_or_else(|_| "us-east-1".to_string());
 
-    let rt = tokio::runtime::Runtime::new().map_err(|e| {
-        OfffError::InvalidContainer(format!("failed to start async runtime: {e}"))
-    })?;
+    let rt = tokio::runtime::Runtime::new()
+        .map_err(|e| OfffError::InvalidContainer(format!("failed to start async runtime: {e}")))?;
     let conf = rt.block_on(async {
-        let mut loader = aws_config::defaults(BehaviorVersion::latest()).region(Region::new(region));
+        let mut loader =
+            aws_config::defaults(BehaviorVersion::latest()).region(Region::new(region));
         if let Some(ep) = endpoint {
             loader = loader.endpoint_url(ep);
         }

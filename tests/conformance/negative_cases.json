@@ -1,0 +1,20 @@
+[
+  {
+    "name": "missing_manifest",
+    "expected_profile": "reader",
+    "expected_status": "FAIL",
+    "mutation": {
+      "type": "delete_file",
+      "path": "manifest.json"
+    }
+  },
+  {
+    "name": "empty_provenance",
+    "expected_profile": "analysis",
+    "expected_status": "FAIL",
+    "mutation": {
+      "type": "truncate_file",
+      "path": "provenance/chain_of_custody.jsonl"
+    }
+  }
+]

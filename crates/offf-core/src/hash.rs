@@ -74,10 +74,8 @@ pub fn merkle_root(leaf_hashes: &[String]) -> Result<String, OfffError> {
         ));
     }
 
-    let leaves: Result<Vec<[u8; 32]>, OfffError> = leaf_hashes
-        .iter()
-        .map(|h| hex_to_bytes32(h))
-        .collect();
+    let leaves: Result<Vec<[u8; 32]>, OfffError> =
+        leaf_hashes.iter().map(|h| hex_to_bytes32(h)).collect();
     let leaves = leaves?;
 
     Ok(hex_from_bytes32(merkle_root_from_bytes(&leaves)))
@@ -88,7 +86,7 @@ fn merkle_root_from_bytes(nodes: &[[u8; 32]]) -> [u8; 32] {
         return nodes[0];
     }
 
-    let mut next: Vec<[u8; 32]> = Vec::with_capacity((nodes.len() + 1) / 2);
+    let mut next: Vec<[u8; 32]> = Vec::with_capacity(nodes.len().div_ceil(2));
     let mut i = 0;
     while i < nodes.len() {
         let left = nodes[i];
@@ -129,7 +127,7 @@ pub fn generate_merkle_proof(
     let mut cur_idx = idx;
 
     while level.len() > 1 {
-        let (sib_idx, position) = if cur_idx % 2 == 0 {
+        let (sib_idx, position) = if cur_idx.is_multiple_of(2) {
             (
                 if cur_idx + 1 < level.len() {
                     cur_idx + 1
@@ -147,7 +145,7 @@ pub fn generate_merkle_proof(
             hash: hex_from_bytes32(level[sib_idx]),
         });
 
-        let mut next: Vec<[u8; 32]> = Vec::with_capacity((level.len() + 1) / 2);
+        let mut next: Vec<[u8; 32]> = Vec::with_capacity(level.len().div_ceil(2));
         let mut i = 0;
         while i < level.len() {
             let left = level[i];
@@ -179,7 +177,7 @@ pub fn verify_merkle_proof(
     proof: &MerkleProof,
     expected_root: &str,
 ) -> Result<bool, OfffError> {
-    if proof.algorithm.to_ascii_lowercase() != "sha256" {
+    if !proof.algorithm.eq_ignore_ascii_case("sha256") {
         return Err(OfffError::InvalidMerkleTree(format!(
             "unsupported proof algorithm: {}",
             proof.algorithm
@@ -228,15 +226,11 @@ fn hash_pair(left: [u8; 32], right: [u8; 32]) -> [u8; 32] {
 /// ```
 pub fn serialize_merkle_tree(leaf_hashes: &[String]) -> Result<Vec<u8>, OfffError> {
     if leaf_hashes.is_empty() {
-        return Err(OfffError::InvalidMerkleTree(
-            "empty leaf set".into(),
-        ));
+        return Err(OfffError::InvalidMerkleTree("empty leaf set".into()));
     }
 
-    let leaves: Result<Vec<[u8; 32]>, OfffError> = leaf_hashes
-        .iter()
-        .map(|h| hex_to_bytes32(h))
-        .collect();
+    let leaves: Result<Vec<[u8; 32]>, OfffError> =
+        leaf_hashes.iter().map(|h| hex_to_bytes32(h)).collect();
     let leaves = leaves?;
 
     // Build all levels
@@ -246,11 +240,15 @@ pub fn serialize_merkle_tree(leaf_hashes: &[String]) -> Result<Vec<u8>, OfffErro
         if cur.len() == 1 {
             break;
         }
-        let mut next: Vec<[u8; 32]> = Vec::with_capacity((cur.len() + 1) / 2);
+        let mut next: Vec<[u8; 32]> = Vec::with_capacity(cur.len().div_ceil(2));
         let mut i = 0;
         while i < cur.len() {
             let left = cur[i];
-            let right = if i + 1 < cur.len() { cur[i + 1] } else { cur[i] };
+            let right = if i + 1 < cur.len() {
+                cur[i + 1]
+            } else {
+                cur[i]
+            };
             next.push(hash_pair(left, right));
             i += 2;
         }
@@ -301,7 +299,7 @@ pub fn parse_and_validate_merkle_tree(data: &[u8]) -> Result<ValidatedMerkleTree
     let mut n = leaf_count;
     while n > 1 {
         level_sizes.push(n);
-        n = (n + 1) / 2;
+        n = n.div_ceil(2);
     }
     level_sizes.push(1);
 
@@ -335,7 +333,7 @@ pub fn parse_and_validate_merkle_tree(data: &[u8]) -> Result<ValidatedMerkleTree
     for i in 0..(levels.len() - 1) {
         let cur = &levels[i];
         let next = &levels[i + 1];
-        if next.len() != (cur.len() + 1) / 2 {
+        if next.len() != cur.len().div_ceil(2) {
             return Err(OfffError::InvalidMerkleTree(format!(
                 "invalid level shape at level {i}: cur={}, next={}",
                 cur.len(),
@@ -345,7 +343,11 @@ pub fn parse_and_validate_merkle_tree(data: &[u8]) -> Result<ValidatedMerkleTree
         let mut j = 0usize;
         while j < cur.len() {
             let left = cur[j];
-            let right = if j + 1 < cur.len() { cur[j + 1] } else { cur[j] };
+            let right = if j + 1 < cur.len() {
+                cur[j + 1]
+            } else {
+                cur[j]
+            };
             let expected = hash_pair(left, right);
             let parent_idx = j / 2;
             if next[parent_idx] != expected {
@@ -366,9 +368,7 @@ pub fn parse_and_validate_merkle_tree(data: &[u8]) -> Result<ValidatedMerkleTree
         ));
     }
     if root_level[0] != root_tail {
-        return Err(OfffError::InvalidMerkleTree(
-            "root tail mismatch".into(),
-        ));
+        return Err(OfffError::InvalidMerkleTree("root tail mismatch".into()));
     }
 
     let leaves_hex = levels[0].iter().copied().map(hex_from_bytes32).collect();
@@ -413,7 +413,7 @@ mod tests {
     #[test]
     fn single_leaf_root_is_leaf() {
         let leaf = "a".repeat(64);
-        let root = merkle_root(&[leaf.clone()]).unwrap();
+        let root = merkle_root(std::slice::from_ref(&leaf)).unwrap();
         assert_eq!(root, leaf);
     }
 
@@ -431,9 +431,7 @@ mod tests {
 
     #[test]
     fn odd_leaves_are_duplicated() {
-        let leaves: Vec<String> = (0u8..3)
-            .map(|i| format!("{:064x}", i as u64))
-            .collect();
+        let leaves: Vec<String> = (0u8..3).map(|i| format!("{:064x}", i as u64)).collect();
         // Should not panic
         let root = merkle_root(&leaves).unwrap();
         assert_eq!(root.len(), 64);
@@ -441,9 +439,7 @@ mod tests {
 
     #[test]
     fn serialize_deserialize_root() {
-        let leaves: Vec<String> = (0u8..5)
-            .map(|i| format!("{:064x}", i as u64))
-            .collect();
+        let leaves: Vec<String> = (0u8..5).map(|i| format!("{:064x}", i as u64)).collect();
         let root_direct = merkle_root(&leaves).unwrap();
         let blob = serialize_merkle_tree(&leaves).unwrap();
         let root_from_bin = deserialize_merkle_root(&blob).unwrap();
@@ -452,9 +448,7 @@ mod tests {
 
     #[test]
     fn merkle_proof_roundtrip_for_all_leaves() {
-        let leaves: Vec<String> = (0u8..7)
-            .map(|i| format!("{:064x}", i as u64))
-            .collect();
+        let leaves: Vec<String> = (0u8..7).map(|i| format!("{:064x}", i as u64)).collect();
         let root = merkle_root(&leaves).unwrap();
         for (seq, leaf) in leaves.iter().enumerate() {
             let proof = generate_merkle_proof(&leaves, seq as u64).unwrap();
@@ -465,9 +459,7 @@ mod tests {
 
     #[test]
     fn merkle_proof_fails_on_modified_leaf() {
-        let leaves: Vec<String> = (0u8..4)
-            .map(|i| format!("{:064x}", i as u64))
-            .collect();
+        let leaves: Vec<String> = (0u8..4).map(|i| format!("{:064x}", i as u64)).collect();
         let root = merkle_root(&leaves).unwrap();
         let proof = generate_merkle_proof(&leaves, 2).unwrap();
         let bad_leaf = "f".repeat(64);
@@ -477,9 +469,7 @@ mod tests {
 
     #[test]
     fn merkle_proof_fails_on_modified_sibling() {
-        let leaves: Vec<String> = (0u8..5)
-            .map(|i| format!("{:064x}", i as u64))
-            .collect();
+        let leaves: Vec<String> = (0u8..5).map(|i| format!("{:064x}", i as u64)).collect();
         let root = merkle_root(&leaves).unwrap();
         let mut proof = generate_merkle_proof(&leaves, 1).unwrap();
         proof.siblings[0].hash = "a".repeat(64);
@@ -489,9 +479,7 @@ mod tests {
 
     #[test]
     fn parse_and_validate_merkle_tree_detects_internal_corruption() {
-        let leaves: Vec<String> = (0u8..3)
-            .map(|i| format!("{:064x}", i as u64))
-            .collect();
+        let leaves: Vec<String> = (0u8..3).map(|i| format!("{:064x}", i as u64)).collect();
         let mut blob = serialize_merkle_tree(&leaves).unwrap();
         // Corrupt first internal node (after header + leaf level).
         let off = 9 + leaves.len() * 32;
@@ -502,9 +490,7 @@ mod tests {
 
     #[test]
     fn parse_and_validate_merkle_tree_detects_leaf_count_mismatch() {
-        let leaves: Vec<String> = (0u8..4)
-            .map(|i| format!("{:064x}", i as u64))
-            .collect();
+        let leaves: Vec<String> = (0u8..4).map(|i| format!("{:064x}", i as u64)).collect();
         let mut blob = serialize_merkle_tree(&leaves).unwrap();
         // Set leaf_count to 5 while payload still encodes 4 leaves.
         blob[5..9].copy_from_slice(&(5u32.to_be_bytes()));

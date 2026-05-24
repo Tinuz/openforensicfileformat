@@ -115,7 +115,10 @@ fn main() -> Result<()> {
     } else {
         let scope_set: std::collections::HashSet<&str> =
             job.scope.chunks.iter().map(|s| s.as_str()).collect();
-        all_chunks.iter().filter(|c| scope_set.contains(c.chunk_id.as_str())).collect()
+        all_chunks
+            .iter()
+            .filter(|c| scope_set.contains(c.chunk_id.as_str()))
+            .collect()
     };
 
     println!("Job:         {}", job.job_id);
@@ -185,14 +188,12 @@ fn main() -> Result<()> {
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent)?;
             }
-            write_yara_hits(&path, &all_hits)
-                .context("failed to write yara_hits.parquet")?;
+            write_yara_hits(&path, &all_hits).context("failed to write yara_hits.parquet")?;
             fs::read(&path).context("failed to re-read yara_hits.parquet for hashing")?
         }
         None => {
             let tmp = tempfile::NamedTempFile::new()?;
-            write_yara_hits(tmp.path(), &all_hits)
-                .context("failed to write yara_hits.parquet")?;
+            write_yara_hits(tmp.path(), &all_hits).context("failed to write yara_hits.parquet")?;
             let bytes = fs::read(tmp.path())?;
             container.write_bytes(&rel_output, &bytes)?;
             bytes

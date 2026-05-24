@@ -32,6 +32,10 @@ The suite includes expected-fail scenarios, for example:
 - missing manifest
 - empty provenance log
 
+Negative cases are defined in:
+
+tests/conformance/negative_cases.json
+
 Each negative scenario records expected vs observed status and marks PASS only if failure is correctly detected.
 
 Run
@@ -85,3 +89,4 @@ Maintenance notes
 - Keep report schema stable for CI consumers.
 - Add new checks with clear names and deterministic details.
 - When adding a new OFFF profile, extend both runner and report structure in one change.
+- When adding negative scenarios, update tests/conformance/negative_cases.json instead of hardcoding cases in the runner.

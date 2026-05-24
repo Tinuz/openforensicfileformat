@@ -121,7 +121,10 @@ fn main() -> Result<()> {
     } else {
         let scope_set: std::collections::HashSet<&str> =
             job.scope.chunks.iter().map(|s| s.as_str()).collect();
-        all_chunks.iter().filter(|c| scope_set.contains(c.chunk_id.as_str())).collect()
+        all_chunks
+            .iter()
+            .filter(|c| scope_set.contains(c.chunk_id.as_str()))
+            .collect()
     };
 
     println!("Job:      {}", job.job_id);
@@ -134,20 +137,13 @@ fn main() -> Result<()> {
     let patterns: Vec<(String, String, Vec<u8>)> = keywords
         .iter()
         .flat_map(|kw| {
-            encodings.iter().filter_map(|enc| {
-                match enc.as_str() {
-                    "utf-8" => {
-                        Some((kw.clone(), "utf-8".to_string(), kw.as_bytes().to_vec()))
-                    }
-                    "utf-16le" => {
-                        let bytes: Vec<u8> = kw
-                            .encode_utf16()
-                            .flat_map(|c| c.to_le_bytes())
-                            .collect();
-                        Some((kw.clone(), "utf-16le".to_string(), bytes))
-                    }
-                    _ => None,
+            encodings.iter().filter_map(|enc| match enc.as_str() {
+                "utf-8" => Some((kw.clone(), "utf-8".to_string(), kw.as_bytes().to_vec())),
+                "utf-16le" => {
+                    let bytes: Vec<u8> = kw.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+                    Some((kw.clone(), "utf-16le".to_string(), bytes))
                 }
+                _ => None,
             })
         })
         .collect();
@@ -155,46 +151,47 @@ fn main() -> Result<()> {
     // ── Parallel chunk scan ───────────────────────────────────────────────
     let hits: Mutex<Vec<KeywordHitRow>> = Mutex::new(Vec::new());
 
-    scoped_chunks.par_iter().try_for_each(|chunk| -> Result<()> {
-        let plaintext = read_chunk_verified(&container, chunk)
-            .with_context(|| format!("failed to read chunk {}", chunk.chunk_id))?;
+    scoped_chunks
+        .par_iter()
+        .try_for_each(|chunk| -> Result<()> {
+            let plaintext = read_chunk_verified(&container, chunk)
+                .with_context(|| format!("failed to read chunk {}", chunk.chunk_id))?;
 
-        let mut local_hits: Vec<KeywordHitRow> = Vec::new();
+            let mut local_hits: Vec<KeywordHitRow> = Vec::new();
 
-        for (keyword, encoding, pattern) in &patterns {
-            if pattern.is_empty() {
-                continue;
+            for (keyword, encoding, pattern) in &patterns {
+                if pattern.is_empty() {
+                    continue;
+                }
+                for offset in find_all(&plaintext, pattern) {
+                    let physical_offset = chunk.source_offset + offset as u64;
+                    let before_start = offset.saturating_sub(CONTEXT_BYTES);
+                    let after_end = (offset + pattern.len() + CONTEXT_BYTES).min(plaintext.len());
+                    let context_before = hex::encode(&plaintext[before_start..offset]);
+                    let context_after =
+                        hex::encode(&plaintext[(offset + pattern.len())..after_end]);
+
+                    local_hits.push(KeywordHitRow {
+                        hit_id: String::new(), // filled in after collection
+                        job_id: job.job_id.clone(),
+                        keyword: keyword.clone(),
+                        chunk_id: chunk.chunk_id.clone(),
+                        physical_offset,
+                        file_id: String::new(),
+                        context_before,
+                        context_after,
+                        encoding: encoding.clone(),
+                        worker_id: cli.worker_id.clone(),
+                        timestamp: Utc::now().to_rfc3339(),
+                    });
+                }
             }
-            for offset in find_all(&plaintext, pattern) {
-                let physical_offset = chunk.source_offset + offset as u64;
-                let before_start = offset.saturating_sub(CONTEXT_BYTES);
-                let after_end = (offset + pattern.len() + CONTEXT_BYTES).min(plaintext.len());
-                let context_before =
-                    hex::encode(&plaintext[before_start..offset]);
-                let context_after =
-                    hex::encode(&plaintext[(offset + pattern.len())..after_end]);
 
-                local_hits.push(KeywordHitRow {
-                    hit_id: String::new(), // filled in after collection
-                    job_id: job.job_id.clone(),
-                    keyword: keyword.clone(),
-                    chunk_id: chunk.chunk_id.clone(),
-                    physical_offset,
-                    file_id: String::new(),
-                    context_before,
-                    context_after,
-                    encoding: encoding.clone(),
-                    worker_id: cli.worker_id.clone(),
-                    timestamp: Utc::now().to_rfc3339(),
-                });
+            if !local_hits.is_empty() {
+                hits.lock().unwrap().extend(local_hits);
             }
-        }
-
-        if !local_hits.is_empty() {
-            hits.lock().unwrap().extend(local_hits);
-        }
-        Ok(())
-    })?;
+            Ok(())
+        })?;
 
     let mut all_hits = hits.into_inner().unwrap();
     // Sort by physical offset for deterministic output
@@ -223,8 +220,7 @@ fn main() -> Result<()> {
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent)?;
             }
-            write_keyword_hits(&path, &all_hits)
-                .context("failed to write keyword_hits.parquet")?;
+            write_keyword_hits(&path, &all_hits).context("failed to write keyword_hits.parquet")?;
             fs::read(&path).context("failed to re-read keyword_hits.parquet for hashing")?
         }
         None => {

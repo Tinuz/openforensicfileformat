@@ -84,16 +84,14 @@ fn main() -> Result<()> {
 
 fn convert(args: Args) -> Result<()> {
     // ── Validate inputs ────────────────────────────────────────────────────
-    let input_path = args.input.canonicalize().with_context(|| {
-        format!("input file not found: {}", args.input.display())
-    })?;
+    let input_path = args
+        .input
+        .canonicalize()
+        .with_context(|| format!("input file not found: {}", args.input.display()))?;
 
     let final_output = args.output;
     if final_output.exists() {
-        anyhow::bail!(
-            "output path already exists: {}",
-            final_output.display()
-        );
+        anyhow::bail!("output path already exists: {}", final_output.display());
     }
 
     let tmp_output = build_temp_output_path(&final_output);
@@ -109,8 +107,12 @@ fn convert(args: Args) -> Result<()> {
             .with_context(|| format!("failed to create parent directory: {}", parent.display()))?;
     }
 
-    fs::create_dir_all(&tmp_output)
-        .with_context(|| format!("failed to create temporary output directory: {}", tmp_output.display()))?;
+    fs::create_dir_all(&tmp_output).with_context(|| {
+        format!(
+            "failed to create temporary output directory: {}",
+            tmp_output.display()
+        )
+    })?;
 
     let chunk_size = parse_size(&args.chunk_size)
         .with_context(|| format!("invalid chunk size: {}", args.chunk_size))?;
@@ -204,7 +206,7 @@ fn convert(args: Args) -> Result<()> {
             source_offset += n as u64;
             sequence += 1;
 
-            if sequence % 100 == 0 || n < chunk_size as usize {
+            if sequence.is_multiple_of(100) || n < chunk_size as usize {
                 println!(
                     "  chunk {:>6} / offset {:>15} bytes written",
                     sequence, source_offset
@@ -220,10 +222,10 @@ fn convert(args: Args) -> Result<()> {
 
         // ── Phase 2: Merkle tree ───────────────────────────────────────────
         let leaf_hashes: Vec<String> = chunks.iter().map(|c| c.plaintext_sha256.clone()).collect();
-        let merkle_root = offf_core::hash::merkle_root(&leaf_hashes)
-            .context("failed to compute Merkle root")?;
-        let merkle_bytes = serialize_merkle_tree(&leaf_hashes)
-            .context("failed to serialise Merkle tree")?;
+        let merkle_root =
+            offf_core::hash::merkle_root(&leaf_hashes).context("failed to compute Merkle root")?;
+        let merkle_bytes =
+            serialize_merkle_tree(&leaf_hashes).context("failed to serialise Merkle tree")?;
 
         fs::write(base.join("hashes/merkle_tree.bin"), &merkle_bytes)
             .context("failed to write merkle_tree.bin")?;
@@ -293,8 +295,8 @@ fn convert(args: Args) -> Result<()> {
 
         // ── Phase 6: Provenance ────────────────────────────────────────────
         let prov_path = base.join("provenance/chain_of_custody.jsonl");
-        let mut prov = ProvenanceWriter::new(&prov_path)
-            .context("failed to open provenance writer")?;
+        let mut prov =
+            ProvenanceWriter::new(&prov_path).context("failed to open provenance writer")?;
         let output_ref = if args.deterministic {
             container_id.clone()
         } else {
@@ -368,14 +370,13 @@ fn convert(args: Args) -> Result<()> {
             },
         };
 
-        let manifest_json = serde_json::to_string_pretty(&manifest)
-            .context("failed to serialise manifest")?;
+        let manifest_json =
+            serde_json::to_string_pretty(&manifest).context("failed to serialise manifest")?;
         fs::write(base.join("manifest.json"), manifest_json)
             .context("failed to write manifest.json")?;
 
         // ── Phase 8: Self-check before publish ─────────────────────────────
-        self_check_container(base)
-            .context("internal container self-check failed")?;
+        self_check_container(base).context("internal container self-check failed")?;
 
         Ok(container_id)
     })();
@@ -445,12 +446,12 @@ fn self_check_container(base: &Path) -> Result<()> {
     }
 
     let manifest_raw = fs::read_to_string(base.join("manifest.json"))?;
-    let _manifest: ManifestJson = serde_json::from_str(&manifest_raw)
-        .context("failed to parse manifest in self-check")?;
+    let _manifest: ManifestJson =
+        serde_json::from_str(&manifest_raw).context("failed to parse manifest in self-check")?;
 
     let acq_raw = fs::read_to_string(base.join("acquisition.json"))?;
-    let _acq: AcquisitionJson = serde_json::from_str(&acq_raw)
-        .context("failed to parse acquisition in self-check")?;
+    let _acq: AcquisitionJson =
+        serde_json::from_str(&acq_raw).context("failed to parse acquisition in self-check")?;
 
     Ok(())
 }
@@ -496,7 +497,11 @@ fn hash_file_sha256(path: &std::path::Path) -> Result<String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
-fn export_e01_to_raw(input: &std::path::Path, tmp_dir: &std::path::Path, tool: &str) -> Result<PathBuf> {
+fn export_e01_to_raw(
+    input: &std::path::Path,
+    tmp_dir: &std::path::Path,
+    tool: &str,
+) -> Result<PathBuf> {
     #[cfg(windows)]
     {
         if tool.eq_ignore_ascii_case("ewfexport") {
@@ -553,11 +558,7 @@ fn export_e01_to_raw(input: &std::path::Path, tmp_dir: &std::path::Path, tool: &
     };
 
     if !status.success() {
-        anyhow::bail!(
-            "{} exited with status {} while exporting E01",
-            tool,
-            status
-        );
+        anyhow::bail!("{} exited with status {} while exporting E01", tool, status);
     }
 
     let candidates = find_raw_candidates(tmp_dir)?;
@@ -569,7 +570,10 @@ fn export_e01_to_raw(input: &std::path::Path, tmp_dir: &std::path::Path, tool: &
 }
 
 #[cfg(windows)]
-fn export_e01_to_raw_via_docker(input: &std::path::Path, tmp_dir: &std::path::Path) -> Result<PathBuf> {
+fn export_e01_to_raw_via_docker(
+    input: &std::path::Path,
+    tmp_dir: &std::path::Path,
+) -> Result<PathBuf> {
     let input = normalize_external_tool_path(input);
     let tmp_dir = normalize_external_tool_path(tmp_dir);
     let input_dir = input
@@ -603,7 +607,10 @@ fn export_e01_to_raw_via_docker(input: &std::path::Path, tmp_dir: &std::path::Pa
         )?;
 
     if !status.success() {
-        anyhow::bail!("dockerized ewfexport exited with status {} while exporting E01", status);
+        anyhow::bail!(
+            "dockerized ewfexport exited with status {} while exporting E01",
+            status
+        );
     }
 
     let candidates = find_raw_candidates(&tmp_dir)?;

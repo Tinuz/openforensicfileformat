@@ -10,6 +10,12 @@ De scripts zijn bedoeld als snelle regressie-check na wijzigingen in storage, wo
 Beschikbare scripts
 -------------------
 
+- `../e2e/run_cli_e2e.py`
+	- Draait een lokale CLI keten zonder externe infra:
+	- `offf-convert` -> `offf-verify` -> `offf-keyword-worker` -> `offf-yara-worker`.
+	- Controleert job-scoped analysis outputs en `result_manifest.json`.
+	- Schrijft machine-readable rapport naar `tests/e2e/cli-e2e-report.json`.
+
 - `phase5_minio_smoke.py`
 	- Bouwt een kleine OFFF testcontainer.
 	- Uploadt die naar MinIO (`s3://...`).
@@ -40,6 +46,7 @@ Vanaf repository root:
 ```bash
 python tests/smoke/phase5_minio_smoke.py
 python tests/smoke/phase7_e01_smoke.py
+python tests/e2e/run_cli_e2e.py
 ```
 
 Foutanalyse

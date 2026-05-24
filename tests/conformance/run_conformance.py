@@ -10,6 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SAMPLE = ROOT / "tests" / "samples" / "4orensics.case2.offf"
 REPORT = ROOT / "tests" / "conformance" / "conformance-report.json"
+NEGATIVE_CASES = ROOT / "tests" / "conformance" / "negative_cases.json"
 
 
 @dataclass
@@ -62,6 +63,20 @@ def evaluate_reader_profile(container: Path) -> list[CheckResult]:
 
 
 def evaluate_analysis_profile(container: Path) -> list[CheckResult]:
+    jobs_dir = container / "analysis" / "jobs"
+    has_job_dirs = jobs_dir.exists() and any(p.is_dir() for p in jobs_dir.iterdir())
+
+    if has_job_dirs:
+        return [
+            check_exists(jobs_dir, "analysis_jobs_root_present"),
+            CheckResult(
+                name="analysis_jobs_non_empty",
+                status="PASS",
+                detail=str(jobs_dir),
+            ),
+            check_non_empty(container / "provenance" / "chain_of_custody.jsonl", "analysis_provenance_non_empty"),
+        ]
+
     return [
         check_exists(container / "analysis" / "keyword_hits.parquet", "keyword_hits_present"),
         check_exists(container / "analysis" / "yara_hits.parquet", "yara_hits_present"),
@@ -107,49 +122,66 @@ def evaluate_acquisition_profile(container: Path) -> list[CheckResult]:
     ]
 
 
+def apply_mutation(base: Path, mutation: dict[str, object]) -> None:
+    mut_type = mutation.get("type")
+    rel_path = mutation.get("path")
+    if not isinstance(rel_path, str) or not rel_path:
+        raise ValueError("mutation.path must be a non-empty string")
+    target = base / rel_path
+
+    if mut_type == "delete_file":
+        target.unlink(missing_ok=True)
+        return
+    if mut_type == "truncate_file":
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("", encoding="utf-8")
+        return
+
+    raise ValueError(f"unsupported mutation type: {mut_type}")
+
+
+def evaluate_profile(container: Path, profile: str) -> list[CheckResult]:
+    if profile == "reader":
+        return evaluate_reader_profile(container)
+    if profile == "analysis":
+        return evaluate_analysis_profile(container)
+    if profile == "indexer":
+        return evaluate_indexer_profile(container)
+    if profile == "acquisition":
+        return evaluate_acquisition_profile(container)
+    raise ValueError(f"unknown profile for negative test: {profile}")
+
+
 def run_negative_scenarios() -> list[dict[str, object]]:
     results: list[dict[str, object]] = []
+    cases = json.loads(NEGATIVE_CASES.read_text(encoding="utf-8"))
 
-    with tempfile.TemporaryDirectory(prefix="offf-negative-") as tmp:
-        base = Path(tmp) / "case.offf"
-        shutil.copytree(SAMPLE, base)
+    for case in cases:
+        with tempfile.TemporaryDirectory(prefix="offf-negative-") as tmp:
+            base = Path(tmp) / "case.offf"
+            shutil.copytree(SAMPLE, base)
 
-        # Negative 1: missing manifest must fail reader profile.
-        (base / "manifest.json").unlink(missing_ok=True)
-        reader_checks = evaluate_reader_profile(base)
-        reader_failed = profile_status(reader_checks) == "FAIL"
-        results.append(
-            {
-                "name": "missing_manifest",
-                "expected_profile": "reader",
-                "expected_status": "FAIL",
-                "observed_status": profile_status(reader_checks),
-                "status": "PASS" if reader_failed else "FAIL",
-            }
-        )
-
-    with tempfile.TemporaryDirectory(prefix="offf-negative-") as tmp:
-        base = Path(tmp) / "case.offf"
-        shutil.copytree(SAMPLE, base)
-
-        # Negative 2: empty provenance must fail analysis profile.
-        (base / "provenance" / "chain_of_custody.jsonl").write_text("", encoding="utf-8")
-        analysis_checks = evaluate_analysis_profile(base)
-        analysis_failed = profile_status(analysis_checks) == "FAIL"
-        results.append(
-            {
-                "name": "empty_provenance",
-                "expected_profile": "analysis",
-                "expected_status": "FAIL",
-                "observed_status": profile_status(analysis_checks),
-                "status": "PASS" if analysis_failed else "FAIL",
-            }
-        )
+            apply_mutation(base, case["mutation"])
+            checks = evaluate_profile(base, case["expected_profile"])
+            observed_status = profile_status(checks)
+            expected_status = case["expected_status"]
+            results.append(
+                {
+                    "name": case["name"],
+                    "expected_profile": case["expected_profile"],
+                    "expected_status": expected_status,
+                    "observed_status": observed_status,
+                    "status": "PASS" if observed_status == expected_status else "FAIL",
+                }
+            )
 
     return results
 
 
 def run() -> int:
+    if not NEGATIVE_CASES.exists():
+        raise SystemExit(f"missing negative case definition file: {NEGATIVE_CASES}")
+
     reader_checks = evaluate_reader_profile(SAMPLE)
     analysis_checks = evaluate_analysis_profile(SAMPLE)
     indexer_checks = evaluate_indexer_profile(SAMPLE)

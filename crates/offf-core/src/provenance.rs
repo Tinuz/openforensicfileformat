@@ -38,10 +38,7 @@ impl ProvenanceWriter {
             fs::create_dir_all(parent)?;
         }
         // Ensure the file exists
-        OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)?;
+        OpenOptions::new().create(true).append(true).open(path)?;
 
         // Count existing events so we generate unique IDs
         let counter = if path.exists() {

@@ -1,12 +1,12 @@
 use std::{
     fs,
     io::{BufWriter, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use anyhow::{Context, Result};
-use sha2::{Digest, Sha256};
 use clap::Parser;
+use sha2::{Digest, Sha256};
 
 use offf_core::{
     chunk::read_chunk,
@@ -105,10 +105,10 @@ fn main() -> Result<()> {
     }
 }
 
-fn export(base: &PathBuf, output: &PathBuf) -> Result<()> {
+fn export(base: &Path, output: &Path) -> Result<()> {
     // ── Load manifest ──────────────────────────────────────────────────────
-    let manifest_raw = fs::read_to_string(base.join("manifest.json"))
-        .context("manifest.json not found")?;
+    let manifest_raw =
+        fs::read_to_string(base.join("manifest.json")).context("manifest.json not found")?;
     let manifest: ManifestJson =
         serde_json::from_str(&manifest_raw).context("invalid manifest.json")?;
 

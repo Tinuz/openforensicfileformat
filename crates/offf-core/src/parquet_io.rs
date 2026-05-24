@@ -1,19 +1,20 @@
 use std::{fs, path::Path, sync::Arc};
 
 use arrow::{
-    array::{
-        ArrayRef, BooleanArray, StringArray, UInt64Array,
-    },
+    array::{ArrayRef, BooleanArray, StringArray, UInt64Array},
     datatypes::{DataType, Field, Schema},
     record_batch::RecordBatch,
 };
 use bytes::Bytes;
 use parquet::{
-    arrow::{ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder},
+    arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter},
     file::properties::WriterProperties,
 };
 
-use crate::{error::OfffError, types::{ChunkMetadata, FileIndexRow, KeywordHitRow, YaraHitRow}};
+use crate::{
+    error::OfffError,
+    types::{ChunkMetadata, FileIndexRow, KeywordHitRow, YaraHitRow},
+};
 
 // ── physical_to_chunk.parquet ─────────────────────────────────────────────────
 
@@ -31,11 +32,18 @@ pub fn write_physical_to_chunk(path: &Path, chunks: &[ChunkMetadata]) -> Result<
     let source_length: UInt64Array = chunks.iter().map(|c| Some(c.source_length)).collect();
     let chunk_id: StringArray = chunks.iter().map(|c| Some(c.chunk_id.as_str())).collect();
     let stored_length: UInt64Array = chunks.iter().map(|c| Some(c.stored_length)).collect();
-    let compression: StringArray = chunks.iter().map(|c| Some(c.compression.as_str())).collect();
-    let plaintext_sha256: StringArray =
-        chunks.iter().map(|c| Some(c.plaintext_sha256.as_str())).collect();
-    let stored_sha256: StringArray =
-        chunks.iter().map(|c| Some(c.stored_sha256.as_str())).collect();
+    let compression: StringArray = chunks
+        .iter()
+        .map(|c| Some(c.compression.as_str()))
+        .collect();
+    let plaintext_sha256: StringArray = chunks
+        .iter()
+        .map(|c| Some(c.plaintext_sha256.as_str()))
+        .collect();
+    let stored_sha256: StringArray = chunks
+        .iter()
+        .map(|c| Some(c.stored_sha256.as_str()))
+        .collect();
 
     let batch = RecordBatch::try_new(
         Arc::new(schema),
@@ -74,7 +82,6 @@ pub fn read_physical_to_chunk_bytes(data: &[u8]) -> Result<Vec<ChunkMetadata>, O
 fn read_physical_to_chunk_reader(
     reader: impl Iterator<Item = Result<RecordBatch, arrow::error::ArrowError>>,
 ) -> Result<Vec<ChunkMetadata>, OfffError> {
-
     let mut chunks = Vec::new();
     for batch in reader {
         let batch = batch?;
@@ -118,8 +125,10 @@ pub fn write_leaves(path: &Path, chunks: &[ChunkMetadata]) -> Result<(), OfffErr
 
     let sequence: UInt64Array = chunks.iter().map(|c| Some(c.sequence)).collect();
     let chunk_id: StringArray = chunks.iter().map(|c| Some(c.chunk_id.as_str())).collect();
-    let plaintext_sha256: StringArray =
-        chunks.iter().map(|c| Some(c.plaintext_sha256.as_str())).collect();
+    let plaintext_sha256: StringArray = chunks
+        .iter()
+        .map(|c| Some(c.plaintext_sha256.as_str()))
+        .collect();
 
     let batch = RecordBatch::try_new(
         Arc::new(schema),
@@ -192,10 +201,7 @@ fn write_batch(path: &Path, batch: RecordBatch) -> Result<(), OfffError> {
     Ok(())
 }
 
-fn as_u64_col<'a>(
-    batch: &'a RecordBatch,
-    name: &str,
-) -> Result<&'a UInt64Array, OfffError> {
+fn as_u64_col<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a UInt64Array, OfffError> {
     batch
         .column_by_name(name)
         .ok_or_else(|| OfffError::InvalidManifest(format!("missing column '{name}'")))?
@@ -204,10 +210,7 @@ fn as_u64_col<'a>(
         .ok_or_else(|| OfffError::InvalidManifest(format!("column '{name}' is not UInt64")))
 }
 
-fn as_str_col<'a>(
-    batch: &'a RecordBatch,
-    name: &str,
-) -> Result<&'a StringArray, OfffError> {
+fn as_str_col<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a StringArray, OfffError> {
     batch
         .column_by_name(name)
         .ok_or_else(|| OfffError::InvalidManifest(format!("missing column '{name}'")))?
@@ -249,7 +252,10 @@ pub fn write_file_index(path: &Path, rows: &[FileIndexRow]) -> Result<(), OfffEr
     ]));
 
     let file_id: UInt64Array = rows.iter().map(|r| Some(r.file_id)).collect();
-    let filesystem_id: StringArray = rows.iter().map(|r| Some(r.filesystem_id.as_str())).collect();
+    let filesystem_id: StringArray = rows
+        .iter()
+        .map(|r| Some(r.filesystem_id.as_str()))
+        .collect();
     let partition_id: StringArray = rows.iter().map(|r| Some(r.partition_id.as_str())).collect();
     let path_col: StringArray = rows.iter().map(|r| Some(r.path.as_str())).collect();
     let filename: StringArray = rows.iter().map(|r| Some(r.filename.as_str())).collect();
@@ -259,18 +265,23 @@ pub fn write_file_index(path: &Path, rows: &[FileIndexRow]) -> Result<(), OfffEr
     let modified_at: StringArray = rows.iter().map(|r| Some(opt_dt(r.modified_at))).collect();
     let accessed_at: StringArray = rows.iter().map(|r| Some(opt_dt(r.accessed_at))).collect();
     let changed_at: StringArray = rows.iter().map(|r| Some(opt_dt(r.changed_at))).collect();
-    let physical_extents: StringArray =
-        rows.iter().map(|r| Some(r.physical_extents.as_str())).collect();
+    let physical_extents: StringArray = rows
+        .iter()
+        .map(|r| Some(r.physical_extents.as_str()))
+        .collect();
     let chunk_refs: StringArray = rows.iter().map(|r| Some(r.chunk_refs.as_str())).collect();
     let is_directory: BooleanArray = rows.iter().map(|r| Some(r.is_directory)).collect();
     let is_deleted: BooleanArray = rows.iter().map(|r| Some(r.is_deleted)).collect();
     let parser: StringArray = rows.iter().map(|r| Some(r.parser.as_str())).collect();
-    let parser_version: StringArray =
-        rows.iter().map(|r| Some(r.parser_version.as_str())).collect();
-    let parser_status: StringArray =
-        rows.iter().map(|r| Some(r.parser_status.as_str())).collect();
-    let parser_error: StringArray =
-        rows.iter().map(|r| Some(r.parser_error.as_str())).collect();
+    let parser_version: StringArray = rows
+        .iter()
+        .map(|r| Some(r.parser_version.as_str()))
+        .collect();
+    let parser_status: StringArray = rows
+        .iter()
+        .map(|r| Some(r.parser_status.as_str()))
+        .collect();
+    let parser_error: StringArray = rows.iter().map(|r| Some(r.parser_error.as_str())).collect();
 
     let batch = RecordBatch::try_new(
         schema,
@@ -321,17 +332,39 @@ pub fn write_keyword_hits(path: &Path, rows: &[KeywordHitRow]) -> Result<(), Off
     let batch = RecordBatch::try_new(
         schema,
         vec![
-            Arc::new(StringArray::from_iter_values(rows.iter().map(|r| r.hit_id.as_str()))) as ArrayRef,
-            Arc::new(StringArray::from_iter_values(rows.iter().map(|r| r.job_id.as_str()))) as ArrayRef,
-            Arc::new(StringArray::from_iter_values(rows.iter().map(|r| r.keyword.as_str()))) as ArrayRef,
-            Arc::new(StringArray::from_iter_values(rows.iter().map(|r| r.chunk_id.as_str()))) as ArrayRef,
-            Arc::new(UInt64Array::from_iter_values(rows.iter().map(|r| r.physical_offset))) as ArrayRef,
-            Arc::new(StringArray::from_iter_values(rows.iter().map(|r| r.file_id.as_str()))) as ArrayRef,
-            Arc::new(StringArray::from_iter_values(rows.iter().map(|r| r.context_before.as_str()))) as ArrayRef,
-            Arc::new(StringArray::from_iter_values(rows.iter().map(|r| r.context_after.as_str()))) as ArrayRef,
-            Arc::new(StringArray::from_iter_values(rows.iter().map(|r| r.encoding.as_str()))) as ArrayRef,
-            Arc::new(StringArray::from_iter_values(rows.iter().map(|r| r.worker_id.as_str()))) as ArrayRef,
-            Arc::new(StringArray::from_iter_values(rows.iter().map(|r| r.timestamp.as_str()))) as ArrayRef,
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| r.hit_id.as_str()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| r.job_id.as_str()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| r.keyword.as_str()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| r.chunk_id.as_str()),
+            )) as ArrayRef,
+            Arc::new(UInt64Array::from_iter_values(
+                rows.iter().map(|r| r.physical_offset),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| r.file_id.as_str()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| r.context_before.as_str()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| r.context_after.as_str()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| r.encoding.as_str()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| r.worker_id.as_str()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| r.timestamp.as_str()),
+            )) as ArrayRef,
         ],
     )?;
 
@@ -358,16 +391,36 @@ pub fn write_yara_hits(path: &Path, rows: &[YaraHitRow]) -> Result<(), OfffError
     let batch = RecordBatch::try_new(
         schema,
         vec![
-            Arc::new(StringArray::from_iter_values(rows.iter().map(|r| r.hit_id.as_str()))) as ArrayRef,
-            Arc::new(StringArray::from_iter_values(rows.iter().map(|r| r.job_id.as_str()))) as ArrayRef,
-            Arc::new(StringArray::from_iter_values(rows.iter().map(|r| r.rule_name.as_str()))) as ArrayRef,
-            Arc::new(StringArray::from_iter_values(rows.iter().map(|r| r.ruleset_hash.as_str()))) as ArrayRef,
-            Arc::new(StringArray::from_iter_values(rows.iter().map(|r| r.chunk_id.as_str()))) as ArrayRef,
-            Arc::new(UInt64Array::from_iter_values(rows.iter().map(|r| r.physical_offset))) as ArrayRef,
-            Arc::new(UInt64Array::from_iter_values(rows.iter().map(|r| r.match_length))) as ArrayRef,
-            Arc::new(StringArray::from_iter_values(rows.iter().map(|r| r.file_id.as_str()))) as ArrayRef,
-            Arc::new(StringArray::from_iter_values(rows.iter().map(|r| r.worker_id.as_str()))) as ArrayRef,
-            Arc::new(StringArray::from_iter_values(rows.iter().map(|r| r.timestamp.as_str()))) as ArrayRef,
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| r.hit_id.as_str()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| r.job_id.as_str()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| r.rule_name.as_str()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| r.ruleset_hash.as_str()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| r.chunk_id.as_str()),
+            )) as ArrayRef,
+            Arc::new(UInt64Array::from_iter_values(
+                rows.iter().map(|r| r.physical_offset),
+            )) as ArrayRef,
+            Arc::new(UInt64Array::from_iter_values(
+                rows.iter().map(|r| r.match_length),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| r.file_id.as_str()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| r.worker_id.as_str()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| r.timestamp.as_str()),
+            )) as ArrayRef,
         ],
     )?;
 

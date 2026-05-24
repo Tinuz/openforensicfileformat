@@ -141,7 +141,10 @@ pub fn read_index(container_file: &Path) -> Result<PackedIndex, OfffError> {
     Ok(index)
 }
 
-pub fn unpack_to_directory(container_file: &Path, output_dir: &Path) -> Result<PackedIndex, OfffError> {
+pub fn unpack_to_directory(
+    container_file: &Path,
+    output_dir: &Path,
+) -> Result<PackedIndex, OfffError> {
     let index = read_index(container_file)?;
     let mut file = fs::File::open(container_file)?;
 
@@ -180,7 +183,11 @@ fn safe_rel_path(path: &str) -> Result<PathBuf, OfffError> {
     Ok(PathBuf::from(clean))
 }
 
-fn collect_files_recursive(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), OfffError> {
+fn collect_files_recursive(
+    root: &Path,
+    dir: &Path,
+    out: &mut Vec<PathBuf>,
+) -> Result<(), OfffError> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
@@ -189,7 +196,9 @@ fn collect_files_recursive(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> R
         } else {
             let rel = path
                 .strip_prefix(root)
-                .map_err(|_| OfffError::InvalidContainer("failed to relativize file path".to_string()))?
+                .map_err(|_| {
+                    OfffError::InvalidContainer("failed to relativize file path".to_string())
+                })?
                 .to_path_buf();
             out.push(rel);
         }

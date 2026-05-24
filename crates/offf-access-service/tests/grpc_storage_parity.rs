@@ -115,10 +115,16 @@ async fn grpc_local_vs_s3_case_path_parity() {
     )
     .await;
 
-    assert_eq!(local_result.manifest_has_version, s3_result.manifest_has_version);
+    assert_eq!(
+        local_result.manifest_has_version,
+        s3_result.manifest_has_version
+    );
     assert_eq!(local_result.verify_ok, s3_result.verify_ok);
     assert_eq!(local_result.artifact_written, s3_result.artifact_written);
-    assert_eq!(local_result.provenance_appended, s3_result.provenance_appended);
+    assert_eq!(
+        local_result.provenance_appended,
+        s3_result.provenance_appended
+    );
 }
 
 async fn run_flow(
@@ -162,9 +168,7 @@ async fn run_flow(
                 if let Some(mut stderr) = child.stderr.take() {
                     let _ = stderr.read_to_string(&mut stderr_text);
                 }
-                panic!(
-                    "access service exited early with status {status}; stderr:\n{stderr_text}"
-                );
+                panic!("access service exited early with status {status}; stderr:\n{stderr_text}");
             }
 
             match OfffAccessServiceClient::connect(endpoint.clone()).await {
@@ -213,13 +217,15 @@ async fn run_flow(
         .into_inner();
 
     let write = client
-        .write_analysis_results(with_auth(tonic::Request::new(WriteAnalysisResultsRequest {
-            case_id: case_id.clone(),
-            relative_path: "analysis/jobs/parity-job/parity_hits.jsonl".to_string(),
-            rows: vec![AnalysisRow {
-                json: json!({"source": "parity"}).to_string(),
-            }],
-        })))
+        .write_analysis_results(with_auth(tonic::Request::new(
+            WriteAnalysisResultsRequest {
+                case_id: case_id.clone(),
+                relative_path: "analysis/jobs/parity-job/parity_hits.jsonl".to_string(),
+                rows: vec![AnalysisRow {
+                    json: json!({"source": "parity"}).to_string(),
+                }],
+            },
+        )))
         .await
         .expect("WriteAnalysisResults")
         .into_inner();
@@ -233,14 +239,16 @@ async fn run_flow(
         .into_inner();
 
     let prov = client
-        .append_provenance_event(with_auth(tonic::Request::new(AppendProvenanceEventRequest {
-            case_id,
-            action: "parity_test".to_string(),
-            actor: "test-runner".to_string(),
-            details_json: json!({"scope": "storage_parity"}).to_string(),
-            tool_name: "grpc-test".to_string(),
-            tool_version: "0.1.0".to_string(),
-        })))
+        .append_provenance_event(with_auth(tonic::Request::new(
+            AppendProvenanceEventRequest {
+                case_id,
+                action: "parity_test".to_string(),
+                actor: "test-runner".to_string(),
+                details_json: json!({"scope": "storage_parity"}).to_string(),
+                tool_name: "grpc-test".to_string(),
+                tool_version: "0.1.0".to_string(),
+            },
+        )))
         .await
         .expect("AppendProvenanceEvent")
         .into_inner();
@@ -262,13 +270,7 @@ fn build_case_fixture(root: &Path) -> Result<Fixture, Box<dyn std::error::Error>
     let case_path = root.join(&case_id);
     fs::create_dir_all(&case_path)?;
 
-    let chunk = write_chunk(
-        &case_path,
-        0,
-        0,
-        b"grpc smoke chunk",
-        &Compression::None,
-    )?;
+    let chunk = write_chunk(&case_path, 0, 0, b"grpc smoke chunk", &Compression::None)?;
 
     let map_path = case_path.join("maps").join("physical_to_chunk.parquet");
     write_physical_to_chunk(&map_path, std::slice::from_ref(&chunk))?;
@@ -336,7 +338,10 @@ fn build_case_fixture(root: &Path) -> Result<Fixture, Box<dyn std::error::Error>
 
     fs::create_dir_all(case_path.join("analysis"))?;
     fs::create_dir_all(case_path.join("provenance"))?;
-    fs::write(case_path.join("provenance").join("chain_of_custody.jsonl"), "")?;
+    fs::write(
+        case_path.join("provenance").join("chain_of_custody.jsonl"),
+        "",
+    )?;
 
     Ok(Fixture {
         case_id,
@@ -344,7 +349,10 @@ fn build_case_fixture(root: &Path) -> Result<Fixture, Box<dyn std::error::Error>
     })
 }
 
-fn upload_dir_to_container(src_root: &Path, dst: &ContainerRef) -> Result<(), Box<dyn std::error::Error>> {
+fn upload_dir_to_container(
+    src_root: &Path,
+    dst: &ContainerRef,
+) -> Result<(), Box<dyn std::error::Error>> {
     for entry in walk(src_root)? {
         let rel = entry
             .strip_prefix(src_root)?

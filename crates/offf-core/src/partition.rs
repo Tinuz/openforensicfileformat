@@ -25,10 +25,7 @@ static KNOWN_TYPE_GUIDS: &[(&str, &str)] = &[
         "21686148-6449-6e6f-744e-656564454649",
         "BIOS Boot Partition",
     ),
-    (
-        "e3c9e316-0b5c-4db8-817d-f92df00215ae",
-        "Microsoft Reserved",
-    ),
+    ("e3c9e316-0b5c-4db8-817d-f92df00215ae", "Microsoft Reserved"),
     (
         "ebd0a0a2-b9e5-4433-87c0-68b6b72699c7",
         "Basic Data Partition",
@@ -41,22 +38,10 @@ static KNOWN_TYPE_GUIDS: &[(&str, &str)] = &[
         "0fc63daf-8483-4772-8e79-3d69d8477de4",
         "Linux Filesystem Data",
     ),
-    (
-        "0657fd6d-a4ab-43c4-84e5-0933c84b4f4f",
-        "Linux Swap",
-    ),
-    (
-        "e6d6d379-f507-44c2-a23c-238f2a3df928",
-        "Linux LVM",
-    ),
-    (
-        "48465300-0000-11aa-aa11-00306543ecac",
-        "Apple HFS+",
-    ),
-    (
-        "7c3457ef-0000-11aa-aa11-00306543ecac",
-        "Apple APFS",
-    ),
+    ("0657fd6d-a4ab-43c4-84e5-0933c84b4f4f", "Linux Swap"),
+    ("e6d6d379-f507-44c2-a23c-238f2a3df928", "Linux LVM"),
+    ("48465300-0000-11aa-aa11-00306543ecac", "Apple HFS+"),
+    ("7c3457ef-0000-11aa-aa11-00306543ecac", "Apple APFS"),
 ];
 
 fn lookup_type_guid(guid: &str) -> &'static str {
@@ -236,7 +221,11 @@ pub fn detect_and_parse(
                 start_offset: 0,
                 length: total_size,
                 first_lba: 0,
-                last_lba: if sector_size > 0 { total_size / sector_size as u64 } else { 0 },
+                last_lba: if sector_size > 0 {
+                    total_size / sector_size as u64
+                } else {
+                    0
+                },
                 attributes: None,
                 bootable: None,
                 chunk_refs,
@@ -246,8 +235,7 @@ pub fn detect_and_parse(
     }
 
     // Check MBR signature
-    let has_mbr_sig =
-        sector0.len() >= 512 && sector0[510] == 0x55 && sector0[511] == 0xAA;
+    let has_mbr_sig = sector0.len() >= 512 && sector0[510] == 0x55 && sector0[511] == 0xAA;
 
     // Check for GPT: protective MBR entry (type 0xEE) + "EFI PART" at sector 1
     let is_gpt = if has_mbr_sig && sector0.len() >= 512 {
@@ -463,11 +451,7 @@ fn parse_gpt(
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Collect the `chunk_id`s of all chunks that overlap `[start, start+length)`.
-pub fn chunk_refs_for_range(
-    chunks: &[ChunkMetadata],
-    start: u64,
-    length: u64,
-) -> Vec<String> {
+pub fn chunk_refs_for_range(chunks: &[ChunkMetadata], start: u64, length: u64) -> Vec<String> {
     if length == 0 {
         return vec![];
     }
@@ -493,9 +477,7 @@ fn format_gpt_guid(b: &[u8]) -> String {
     let p3 = u16::from_le_bytes(b[6..8].try_into().unwrap());
     format!(
         "{:08x}-{:04x}-{:04x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        p1, p2, p3,
-        b[8], b[9],
-        b[10], b[11], b[12], b[13], b[14], b[15]
+        p1, p2, p3, b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]
     )
 }
 
@@ -540,8 +522,12 @@ mod tests {
         // Range [50, 150) → overlaps chunks 0 and 1
         let refs = chunk_refs_for_range(&chunks, 50, 100);
         assert_eq!(refs.len(), 2);
-        assert!(refs.contains(&"sha256:0000000000000000000000000000000000000000000000000000000000000000".to_string()));
-        assert!(refs.contains(&"sha256:0000000000000000000000000000000000000000000000000000000000000001".to_string()));
+        assert!(refs.contains(
+            &"sha256:0000000000000000000000000000000000000000000000000000000000000000".to_string()
+        ));
+        assert!(refs.contains(
+            &"sha256:0000000000000000000000000000000000000000000000000000000000000001".to_string()
+        ));
     }
 
     #[test]
@@ -550,9 +536,9 @@ mod tests {
         // {c12a7328-f81f-11d2-ba4b-00a0c93ec93b}
         let raw: [u8; 16] = [
             0x28, 0x73, 0x2a, 0xc1, // p1 LE: c12a7328
-            0x1f, 0xf8,             // p2 LE: f81f
-            0xd2, 0x11,             // p3 LE: 11d2
-            0xba, 0x4b,             // p4 (BE)
+            0x1f, 0xf8, // p2 LE: f81f
+            0xd2, 0x11, // p3 LE: 11d2
+            0xba, 0x4b, // p4 (BE)
             0x00, 0xa0, 0xc9, 0x3e, 0xc9, 0x3b, // p5 (BE)
         ];
         let g = format_gpt_guid(&raw);
