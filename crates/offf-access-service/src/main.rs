@@ -44,6 +44,49 @@ use grpc::{
 struct AppState {
     cases_root: String,
     tool_registry_path: String,
+    auth_mode: AuthMode,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum AuthMode {
+    DevHeaders,
+    Jwt,
+    Mtls,
+}
+
+impl AuthMode {
+    fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "dev_headers" | "dev-headers" => Some(Self::DevHeaders),
+            "jwt" => Some(Self::Jwt),
+            "mtls" => Some(Self::Mtls),
+            _ => None,
+        }
+    }
+
+    fn role_header(self) -> &'static str {
+        match self {
+            Self::DevHeaders => "x-offf-role",
+            Self::Jwt => "x-offf-claim-role",
+            Self::Mtls => "x-offf-cert-role",
+        }
+    }
+
+    fn tool_header(self) -> &'static str {
+        match self {
+            Self::DevHeaders => "x-offf-tool-id",
+            Self::Jwt => "x-offf-claim-tool-id",
+            Self::Mtls => "x-offf-cert-tool-id",
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::DevHeaders => "dev_headers",
+            Self::Jwt => "jwt",
+            Self::Mtls => "mtls",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -103,6 +146,8 @@ struct ToolRegistration {
 enum AuthError {
     Unauthorized(String),
 }
+
+const DENIED_WRITES_REL: &str = "extensions/access/denied_access_events.jsonl";
 
 #[derive(Clone, Copy)]
 enum WriteLayer {
@@ -186,6 +231,11 @@ async fn main() -> Result<()> {
         env::var("OFFF_ACCESS_GRPC_BIND").unwrap_or_else(|_| "0.0.0.0:50051".to_string());
     let tool_registry_path = env::var("OFFF_TOOL_REGISTRY")
         .unwrap_or_else(|_| "config/tool-registry.json".to_string());
+    let auth_mode = env::var("OFFF_AUTH_MODE")
+        .ok()
+        .as_deref()
+        .and_then(AuthMode::parse)
+        .unwrap_or(AuthMode::DevHeaders);
     let rest_addr: SocketAddr = rest_bind.parse().context("invalid OFFF_ACCESS_BIND")?;
     let grpc_addr: SocketAddr = grpc_bind
         .parse()
@@ -194,7 +244,10 @@ async fn main() -> Result<()> {
     let state = AppState {
         cases_root,
         tool_registry_path,
+        auth_mode,
     };
+
+    tracing::info!(auth_mode = %state.auth_mode.as_str(), "access auth mode configured");
 
     let app = Router::new()
         .route("/cases/{case_id}/manifest", get(get_manifest))
@@ -323,9 +376,27 @@ impl OfffAccessService for GrpcAccessService {
         &self,
         request: Request<WriteAnalysisResultsRequest>,
     ) -> Result<GrpcResponse<WriteAnalysisResultsResponse>, Status> {
-        let actor = actor_from_metadata(request.metadata())
-            .map_err(grpc_status_from_auth)?;
+        let actor = match actor_from_metadata(self.state.auth_mode, request.metadata()) {
+            Ok(actor) => actor,
+            Err(err) => {
+                log_denied_write_best_effort(
+                    &self.state,
+                    &request.get_ref().case_id,
+                    "grpc_write_analysis_results",
+                    "authentication failed",
+                    None,
+                );
+                return Err(grpc_status_from_auth(err));
+            }
+        };
         if !actor.role.can_write_analysis() {
+            log_denied_write_best_effort(
+                &self.state,
+                &request.get_ref().case_id,
+                "grpc_write_analysis_results",
+                "role cannot write analysis",
+                Some(&actor),
+            );
             tracing::warn!(
                 action = "grpc_write_analysis_results",
                 tool_id = %actor.tool_id,
@@ -338,8 +409,16 @@ impl OfffAccessService for GrpcAccessService {
                 "role not allowed to write analysis layer",
             ));
         }
-        enforce_tool_registry(&self.state, &actor, WriteLayer::Analysis)
-            .map_err(grpc_status)?;
+        if let Err(err) = enforce_tool_registry(&self.state, &actor, WriteLayer::Analysis) {
+            log_denied_write_best_effort(
+                &self.state,
+                &request.get_ref().case_id,
+                "grpc_write_analysis_results",
+                &err.message,
+                Some(&actor),
+            );
+            return Err(grpc_status(err));
+        }
 
         let req = request.into_inner();
         let case_ref = resolve_case_ref(&self.state, &req.case_id).map_err(grpc_status)?;
@@ -351,7 +430,19 @@ impl OfffAccessService for GrpcAccessService {
             rows.push(value);
         }
 
-        let target = write_analysis_rows(&case_ref, &req.relative_path, &rows).map_err(grpc_status)?;
+        let target = match write_analysis_rows(&case_ref, &req.relative_path, &rows) {
+            Ok(target) => target,
+            Err(err) => {
+                log_denied_write_best_effort(
+                    &self.state,
+                    &req.case_id,
+                    "grpc_write_analysis_results",
+                    &err.message,
+                    Some(&actor),
+                );
+                return Err(grpc_status(err));
+            }
+        };
         tracing::info!(
             action = "grpc_write_analysis_results",
             case_id = %req.case_id,
@@ -370,9 +461,27 @@ impl OfffAccessService for GrpcAccessService {
         &self,
         request: Request<AppendProvenanceEventRequest>,
     ) -> Result<GrpcResponse<AppendProvenanceEventResponse>, Status> {
-        let actor = actor_from_metadata(request.metadata())
-            .map_err(grpc_status_from_auth)?;
+        let actor = match actor_from_metadata(self.state.auth_mode, request.metadata()) {
+            Ok(actor) => actor,
+            Err(err) => {
+                log_denied_write_best_effort(
+                    &self.state,
+                    &request.get_ref().case_id,
+                    "grpc_append_provenance_event",
+                    "authentication failed",
+                    None,
+                );
+                return Err(grpc_status_from_auth(err));
+            }
+        };
         if !actor.role.can_append_provenance() {
+            log_denied_write_best_effort(
+                &self.state,
+                &request.get_ref().case_id,
+                "grpc_append_provenance_event",
+                "role cannot append provenance",
+                Some(&actor),
+            );
             tracing::warn!(
                 action = "grpc_append_provenance_event",
                 tool_id = %actor.tool_id,
@@ -385,8 +494,16 @@ impl OfffAccessService for GrpcAccessService {
                 "role not allowed to append provenance",
             ));
         }
-        enforce_tool_registry(&self.state, &actor, WriteLayer::Provenance)
-            .map_err(grpc_status)?;
+        if let Err(err) = enforce_tool_registry(&self.state, &actor, WriteLayer::Provenance) {
+            log_denied_write_best_effort(
+                &self.state,
+                &request.get_ref().case_id,
+                "grpc_append_provenance_event",
+                &err.message,
+                Some(&actor),
+            );
+            return Err(grpc_status(err));
+        }
 
         let req = request.into_inner();
         let case_ref = resolve_case_ref(&self.state, &req.case_id).map_err(grpc_status)?;
@@ -428,8 +545,27 @@ impl OfffAccessService for GrpcAccessService {
         &self,
         request: Request<AppendAnalysisCorrectionRequest>,
     ) -> Result<GrpcResponse<AppendAnalysisCorrectionResponse>, Status> {
-        let actor = actor_from_metadata(request.metadata()).map_err(grpc_status_from_auth)?;
+        let actor = match actor_from_metadata(self.state.auth_mode, request.metadata()) {
+            Ok(actor) => actor,
+            Err(err) => {
+                log_denied_write_best_effort(
+                    &self.state,
+                    &request.get_ref().case_id,
+                    "grpc_append_analysis_correction",
+                    "authentication failed",
+                    None,
+                );
+                return Err(grpc_status_from_auth(err));
+            }
+        };
         if !actor.role.can_append_analysis_correction() {
+            log_denied_write_best_effort(
+                &self.state,
+                &request.get_ref().case_id,
+                "grpc_append_analysis_correction",
+                "role cannot append analysis correction",
+                Some(&actor),
+            );
             tracing::warn!(
                 action = "grpc_append_analysis_correction",
                 tool_id = %actor.tool_id,
@@ -442,7 +578,16 @@ impl OfffAccessService for GrpcAccessService {
                 "role not allowed to append analysis correction",
             ));
         }
-        enforce_tool_registry(&self.state, &actor, WriteLayer::Analysis).map_err(grpc_status)?;
+        if let Err(err) = enforce_tool_registry(&self.state, &actor, WriteLayer::Analysis) {
+            log_denied_write_best_effort(
+                &self.state,
+                &request.get_ref().case_id,
+                "grpc_append_analysis_correction",
+                &err.message,
+                Some(&actor),
+            );
+            return Err(grpc_status(err));
+        }
 
         let req = request.into_inner();
         let case_ref = resolve_case_ref(&self.state, &req.case_id).map_err(grpc_status)?;
@@ -552,8 +697,27 @@ async fn write_analysis_results(
     headers: HeaderMap,
     Json(payload): Json<AnalysisResultsRequest>,
 ) -> Result<Json<WriteResultResponse>, ApiError> {
-    let actor = actor_from_headers(&headers)?;
+    let actor = match actor_from_headers(state.auth_mode, &headers) {
+        Ok(actor) => actor,
+        Err(err) => {
+            log_denied_write_best_effort(
+                &state,
+                &case_id,
+                "write_analysis_results",
+                &err.message,
+                None,
+            );
+            return Err(err);
+        }
+    };
     if !actor.role.can_write_analysis() {
+        log_denied_write_best_effort(
+            &state,
+            &case_id,
+            "write_analysis_results",
+            "role cannot write analysis",
+            Some(&actor),
+        );
         tracing::warn!(
             action = "write_analysis_results",
             case_id = %case_id,
@@ -564,10 +728,31 @@ async fn write_analysis_results(
         );
         return Err(ApiError::forbidden("role not allowed to write analysis layer"));
     }
-    enforce_tool_registry(&state, &actor, WriteLayer::Analysis)?;
+    if let Err(err) = enforce_tool_registry(&state, &actor, WriteLayer::Analysis) {
+        log_denied_write_best_effort(
+            &state,
+            &case_id,
+            "write_analysis_results",
+            &err.message,
+            Some(&actor),
+        );
+        return Err(err);
+    }
 
     let case_ref = resolve_case_ref(&state, &case_id)?;
-    let target = write_analysis_rows(&case_ref, &payload.relative_path, &payload.rows)?;
+    let target = match write_analysis_rows(&case_ref, &payload.relative_path, &payload.rows) {
+        Ok(target) => target,
+        Err(err) => {
+            log_denied_write_best_effort(
+                &state,
+                &case_id,
+                "write_analysis_results",
+                &err.message,
+                Some(&actor),
+            );
+            return Err(err);
+        }
+    };
 
     tracing::info!(
         action = "write_analysis_results",
@@ -590,8 +775,27 @@ async fn append_provenance_event(
     headers: HeaderMap,
     Json(payload): Json<ProvenanceEventRequest>,
 ) -> Result<Json<AppendProvenanceResponse>, ApiError> {
-    let actor = actor_from_headers(&headers)?;
+    let actor = match actor_from_headers(state.auth_mode, &headers) {
+        Ok(actor) => actor,
+        Err(err) => {
+            log_denied_write_best_effort(
+                &state,
+                &case_id,
+                "append_provenance_event",
+                &err.message,
+                None,
+            );
+            return Err(err);
+        }
+    };
     if !actor.role.can_append_provenance() {
+        log_denied_write_best_effort(
+            &state,
+            &case_id,
+            "append_provenance_event",
+            "role cannot append provenance",
+            Some(&actor),
+        );
         tracing::warn!(
             action = "append_provenance_event",
             case_id = %case_id,
@@ -602,7 +806,16 @@ async fn append_provenance_event(
         );
         return Err(ApiError::forbidden("role not allowed to append provenance"));
     }
-    enforce_tool_registry(&state, &actor, WriteLayer::Provenance)?;
+    if let Err(err) = enforce_tool_registry(&state, &actor, WriteLayer::Provenance) {
+        log_denied_write_best_effort(
+            &state,
+            &case_id,
+            "append_provenance_event",
+            &err.message,
+            Some(&actor),
+        );
+        return Err(err);
+    }
 
     let case_ref = resolve_case_ref(&state, &case_id)?;
     let appended = append_provenance(
@@ -636,8 +849,27 @@ async fn append_analysis_correction(
     headers: HeaderMap,
     Json(payload): Json<AnalysisCorrectionRequest>,
 ) -> Result<Json<AppendAnalysisCorrectionJsonResponse>, ApiError> {
-    let actor = actor_from_headers(&headers)?;
+    let actor = match actor_from_headers(state.auth_mode, &headers) {
+        Ok(actor) => actor,
+        Err(err) => {
+            log_denied_write_best_effort(
+                &state,
+                &case_id,
+                "append_analysis_correction",
+                &err.message,
+                None,
+            );
+            return Err(err);
+        }
+    };
     if !actor.role.can_append_analysis_correction() {
+        log_denied_write_best_effort(
+            &state,
+            &case_id,
+            "append_analysis_correction",
+            "role cannot append analysis correction",
+            Some(&actor),
+        );
         tracing::warn!(
             action = "append_analysis_correction",
             case_id = %case_id,
@@ -650,7 +882,16 @@ async fn append_analysis_correction(
             "role not allowed to append analysis correction",
         ));
     }
-    enforce_tool_registry(&state, &actor, WriteLayer::Analysis)?;
+    if let Err(err) = enforce_tool_registry(&state, &actor, WriteLayer::Analysis) {
+        log_denied_write_best_effort(
+            &state,
+            &case_id,
+            "append_analysis_correction",
+            &err.message,
+            Some(&actor),
+        );
+        return Err(err);
+    }
 
     let case_ref = resolve_case_ref(&state, &case_id)?;
     let appended = append_analysis_correction_event(
@@ -704,35 +945,59 @@ fn list_file_index_values(case_ref: &ContainerRef, partition_id: Option<&str>) -
 
 fn write_analysis_rows(case_ref: &ContainerRef, relative_path: &str, rows: &[Value]) -> Result<String, ApiError> {
     let rel = normalize_rel_path(relative_path)?;
-    if !rel.starts_with("analysis/") {
-        return Err(ApiError::bad_request("relative_path must start with analysis/"));
+    if !rel.starts_with("analysis/jobs/") {
+        return Err(ApiError::bad_request(
+            "relative_path must start with analysis/jobs/",
+        ));
     }
     if !rel.ends_with(".jsonl") {
         return Err(ApiError::bad_request("only .jsonl is currently supported"));
     }
 
-    if rel.starts_with("indexes/") || rel.starts_with("chunks/") || rel == "manifest.json" {
-        return Err(ApiError::forbidden("write target outside analysis layer is not allowed"));
+    let segments: Vec<&str> = rel.split('/').collect();
+    if segments.len() < 4 || segments[2].trim().is_empty() {
+        return Err(ApiError::bad_request(
+            "relative_path must include job directory: analysis/jobs/{job_id}/...",
+        ));
     }
 
-    for row in rows {
-        case_ref
-            .append_jsonl_line(&rel, &serde_json::to_string(row)?)
-            .map_err(ApiError::from)?;
+    if case_ref.exists(&rel).map_err(ApiError::from)? {
+        return Err(ApiError::forbidden("refusing to overwrite existing analysis result"));
     }
+
+    let mut content = String::new();
+    for row in rows {
+        content.push_str(&serde_json::to_string(row)?);
+        content.push('\n');
+    }
+    case_ref
+        .write_bytes(&rel, content.as_bytes())
+        .map_err(ApiError::from)?;
 
     Ok(rel)
 }
 
-fn actor_from_headers(headers: &HeaderMap) -> Result<ActorContext, ApiError> {
+fn actor_from_headers(auth_mode: AuthMode, headers: &HeaderMap) -> Result<ActorContext, ApiError> {
     let role_raw = headers
-        .get("x-offf-role")
+        .get(auth_mode.role_header())
         .and_then(|v| v.to_str().ok())
-        .ok_or_else(|| ApiError::unauthorized("missing x-offf-role"))?;
+        .ok_or_else(|| {
+            ApiError::unauthorized(format!(
+                "missing {} for auth mode {}",
+                auth_mode.role_header(),
+                auth_mode.as_str()
+            ))
+        })?;
     let tool_id = headers
-        .get("x-offf-tool-id")
+        .get(auth_mode.tool_header())
         .and_then(|v| v.to_str().ok())
-        .ok_or_else(|| ApiError::unauthorized("missing x-offf-tool-id"))?
+        .ok_or_else(|| {
+            ApiError::unauthorized(format!(
+                "missing {} for auth mode {}",
+                auth_mode.tool_header(),
+                auth_mode.as_str()
+            ))
+        })?
         .trim()
         .to_string();
     if tool_id.is_empty() {
@@ -745,17 +1010,36 @@ fn actor_from_headers(headers: &HeaderMap) -> Result<ActorContext, ApiError> {
     Ok(ActorContext { role, tool_id })
 }
 
-fn actor_from_metadata(metadata: &tonic::metadata::MetadataMap) -> Result<ActorContext, AuthError> {
+fn actor_from_metadata(
+    auth_mode: AuthMode,
+    metadata: &tonic::metadata::MetadataMap,
+) -> Result<ActorContext, AuthError> {
     let role_raw = metadata
-        .get("x-offf-role")
-        .ok_or_else(|| AuthError::Unauthorized("missing x-offf-role".to_string()))?
+        .get(auth_mode.role_header())
+        .ok_or_else(|| {
+            AuthError::Unauthorized(format!(
+                "missing {} for auth mode {}",
+                auth_mode.role_header(),
+                auth_mode.as_str()
+            ))
+        })?
         .to_str()
-        .map_err(|_| AuthError::Unauthorized("invalid x-offf-role".to_string()))?;
+        .map_err(|_| {
+            AuthError::Unauthorized(format!("invalid {}", auth_mode.role_header()))
+        })?;
     let tool_id = metadata
-        .get("x-offf-tool-id")
-        .ok_or_else(|| AuthError::Unauthorized("missing x-offf-tool-id".to_string()))?
+        .get(auth_mode.tool_header())
+        .ok_or_else(|| {
+            AuthError::Unauthorized(format!(
+                "missing {} for auth mode {}",
+                auth_mode.tool_header(),
+                auth_mode.as_str()
+            ))
+        })?
         .to_str()
-        .map_err(|_| AuthError::Unauthorized("invalid x-offf-tool-id".to_string()))?
+        .map_err(|_| {
+            AuthError::Unauthorized(format!("invalid {}", auth_mode.tool_header()))
+        })?
         .trim()
         .to_string();
     if tool_id.is_empty() {
@@ -973,6 +1257,82 @@ fn append_provenance(
             .unwrap_or_default()
             .to_string(),
     })
+}
+
+fn log_denied_write_best_effort(
+    state: &AppState,
+    case_id: &str,
+    action: &str,
+    reason: &str,
+    actor: Option<&ActorContext>,
+) {
+    let case_ref = match resolve_case_ref(state, case_id) {
+        Ok(case_ref) => case_ref,
+        Err(err) => {
+            tracing::warn!(
+                action = action,
+                case_id = %case_id,
+                outcome = "deny_log_skip",
+                reason = %reason,
+                resolve_error = %err.message,
+            );
+            return;
+        }
+    };
+
+    let counter = case_ref
+        .read_text(DENIED_WRITES_REL)
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .count()
+        + 1;
+
+    let mut event = serde_json::Map::new();
+    event.insert(
+        "event_id".to_string(),
+        Value::String(format!("denied-{counter:06}")),
+    );
+    event.insert("timestamp".to_string(), Value::String(Utc::now().to_rfc3339()));
+    event.insert("case_id".to_string(), Value::String(case_id.to_string()));
+    event.insert("action".to_string(), Value::String(action.to_string()));
+    event.insert(
+        "auth_mode".to_string(),
+        Value::String(state.auth_mode.as_str().to_string()),
+    );
+    event.insert("reason".to_string(), Value::String(reason.to_string()));
+
+    if let Some(actor) = actor {
+        event.insert("tool_id".to_string(), Value::String(actor.tool_id.clone()));
+        event.insert(
+            "role".to_string(),
+            Value::String(role_name(actor.role).to_string()),
+        );
+    }
+
+    let line = Value::Object(event);
+    match serde_json::to_string(&line) {
+        Ok(jsonl) => {
+            if let Err(err) = case_ref.append_jsonl_line(DENIED_WRITES_REL, &jsonl) {
+                tracing::warn!(
+                    action = action,
+                    case_id = %case_id,
+                    outcome = "deny_log_failed",
+                    reason = %reason,
+                    error = %err,
+                );
+            }
+        }
+        Err(err) => {
+            tracing::warn!(
+                action = action,
+                case_id = %case_id,
+                outcome = "deny_log_failed",
+                reason = %reason,
+                error = %err,
+            );
+        }
+    }
 }
 
 fn value_to_file_row(row: &Value) -> FileRow {

@@ -75,11 +75,15 @@ P0 - Direct oppakken
   - Done: 2026-05-24
   - Progress: `offf-keyword-worker` en `offf-yara-worker` schrijven nu naar `analysis/jobs/{job_id}/...`, weigeren overschrijven van bestaande job-artifacts, en schrijven per job een `result_manifest.json` met SHA-256 van outputbestanden; provenance verwijst naar output + result manifest. `offf-access-service` ondersteunt append-only correction events via REST (`/analysis-corrections`) en gRPC (`AppendAnalysisCorrection`) naar `analysis/events/analysis_events.jsonl`
 
-- [ ] Hardening Sprint 7: Access Service production auth + denied audit (P0)
+- [x] Hardening Sprint 7: Access Service production auth + denied audit (P0)
   - Add `OFFF_AUTH_MODE=dev_headers|jwt|mtls`
   - Enforce trusted role/tool identity from claims/cert in production modes
   - Persist denied writes to append-only denied event log
   - Harden write path validation (no evidence layer writes, no traversal, no overwrite)
+  - Added: 2026-05-24
+  - Status: done
+  - Done: 2026-05-24
+  - Progress: `offf-access-service` ondersteunt nu `OFFF_AUTH_MODE` met mode-specifieke trusted identity headers/metadata (`dev_headers`, `jwt`, `mtls`), logt denied write attempts append-only naar `extensions/access/denied_access_events.jsonl`, en hardent write targets naar `analysis/jobs/{job_id}/...` met traversal- en overwrite-blokkering. gRPC smoke-tests zijn bijgewerkt en valideren denied overwrite logging
 
 - [ ] Hardening Sprint 8: CI + CLI E2E + negative conformance datasets (P0)
   - Enforce `cargo fmt --check`

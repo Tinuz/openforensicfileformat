@@ -136,6 +136,7 @@ async fn run_flow(
         .env("OFFF_ACCESS_BIND", format!("127.0.0.1:{rest_port}"))
         .env("OFFF_ACCESS_GRPC_BIND", format!("127.0.0.1:{grpc_port}"))
         .env("OFFF_TOOL_REGISTRY", &registry_path)
+        .env("OFFF_AUTH_MODE", "dev_headers")
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
 
@@ -214,7 +215,7 @@ async fn run_flow(
     let write = client
         .write_analysis_results(with_auth(tonic::Request::new(WriteAnalysisResultsRequest {
             case_id: case_id.clone(),
-            relative_path: "analysis/parity_hits.jsonl".to_string(),
+            relative_path: "analysis/jobs/parity-job/parity_hits.jsonl".to_string(),
             rows: vec![AnalysisRow {
                 json: json!({"source": "parity"}).to_string(),
             }],
@@ -251,7 +252,7 @@ async fn run_flow(
             && artifacts
                 .paths
                 .iter()
-                .any(|p| p.ends_with("analysis/parity_hits.jsonl")),
+                .any(|p| p.ends_with("analysis/jobs/parity-job/parity_hits.jsonl")),
         provenance_appended: prov.ok && prov.event_id.starts_with("evt-"),
     }
 }

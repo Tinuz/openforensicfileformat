@@ -65,6 +65,7 @@ async fn grpc_smoke_all_methods() {
         .env("OFFF_ACCESS_BIND", format!("127.0.0.1:{rest_port}"))
         .env("OFFF_ACCESS_GRPC_BIND", format!("127.0.0.1:{grpc_port}"))
         .env("OFFF_TOOL_REGISTRY", &registry_path)
+        .env("OFFF_AUTH_MODE", "dev_headers")
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
@@ -174,7 +175,7 @@ async fn grpc_smoke_all_methods() {
     let write = client
         .write_analysis_results(with_auth(tonic::Request::new(WriteAnalysisResultsRequest {
             case_id: fixture.case_id.clone(),
-            relative_path: "analysis/grpc_smoke_hits.jsonl".to_string(),
+            relative_path: "analysis/jobs/grpc-smoke-job/grpc_smoke_hits.jsonl".to_string(),
             rows: vec![AnalysisRow {
                 json: json!({"k": "v", "n": 1}).to_string(),
             }],
@@ -194,7 +195,28 @@ async fn grpc_smoke_all_methods() {
     assert!(artifacts_after
         .paths
         .iter()
-        .any(|p| p.ends_with("analysis/grpc_smoke_hits.jsonl")));
+        .any(|p| p.ends_with("analysis/jobs/grpc-smoke-job/grpc_smoke_hits.jsonl")));
+
+    let write_denied = client
+        .write_analysis_results(with_auth(tonic::Request::new(WriteAnalysisResultsRequest {
+            case_id: fixture.case_id.clone(),
+            relative_path: "analysis/jobs/grpc-smoke-job/grpc_smoke_hits.jsonl".to_string(),
+            rows: vec![AnalysisRow {
+                json: json!({"k": "v2"}).to_string(),
+            }],
+        })))
+        .await
+        .expect_err("second write should be denied");
+    assert_eq!(write_denied.code(), tonic::Code::PermissionDenied);
+
+    let denied_log = fs::read_to_string(
+        root.join(&fixture.case_id)
+            .join("extensions")
+            .join("access")
+            .join("denied_access_events.jsonl"),
+    )
+    .expect("denied write log should exist");
+    assert!(denied_log.contains("grpc_write_analysis_results"));
 
     let appended = client
         .append_provenance_event(with_auth(tonic::Request::new(AppendProvenanceEventRequest {
