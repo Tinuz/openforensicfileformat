@@ -3,16 +3,46 @@ use std::{fs, path::PathBuf};
 use anyhow::{Context, Result};
 use chrono::Utc;
 use clap::Parser;
+use serde::Serialize;
 
 use offf_core::{
+    chunk::hex_sha256,
     parquet_io::{read_physical_to_chunk, read_physical_to_chunk_bytes, write_yara_hits},
     provenance::ProvenanceWriter,
     storage::{read_chunk_verified, ContainerRef},
-    types::{JobManifest, ManifestJson, YaraHitRow},
+    types::{JobManifest, ManifestJson, ToolInfo, YaraHitRow},
 };
 
 const TOOL_NAME: &str = "offf-yara-worker";
 const TOOL_VERSION: &str = env!("CARGO_PKG_VERSION");
+const YARA_HIT_SCHEMA: &str = "offf-yara-hit-row-0.1.0";
+
+#[derive(Debug, Serialize)]
+struct ResultManifest {
+    job_id: String,
+    task: String,
+    created_at: String,
+    tool: ToolInfo,
+    input: ResultManifestInput,
+    outputs: Vec<ResultManifestOutput>,
+}
+
+#[derive(Debug, Serialize)]
+struct ResultManifestInput {
+    container_id: String,
+    source_sha256: String,
+    merkle_root_sha256: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope_ref: Option<String>,
+    chunk_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct ResultManifestOutput {
+    path: String,
+    sha256: String,
+    schema: String,
+}
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
 
@@ -52,7 +82,7 @@ fn main() -> Result<()> {
     let manifest_raw = container
         .read_text("manifest.json")
         .context("manifest.json not found – is this an OFFF container?")?;
-    let _manifest: ManifestJson = serde_json::from_str(&manifest_raw)?;
+    let manifest: ManifestJson = serde_json::from_str(&manifest_raw)?;
 
     // ── Parse parameters ──────────────────────────────────────────────────
     let rules_text = job.parameters["rules_inline"]
@@ -139,26 +169,65 @@ fn main() -> Result<()> {
     println!("Hits found:  {}", all_hits.len());
 
     // ── Write Parquet ─────────────────────────────────────────────────────
-    let rel_output = "analysis/yara_hits.parquet";
-    let output_display = match container.local_path(rel_output) {
+    let job_dir = analysis_job_dir(&job.job_id)?;
+    let rel_output = format!("{job_dir}/yara_hits.parquet");
+    let rel_result_manifest = format!("{job_dir}/result_manifest.json");
+
+    if container.exists(&rel_output)? {
+        anyhow::bail!("refusing to overwrite existing analysis output: {rel_output}");
+    }
+    if container.exists(&rel_result_manifest)? {
+        anyhow::bail!("refusing to overwrite existing result manifest: {rel_result_manifest}");
+    }
+
+    let output_bytes = match container.local_path(&rel_output) {
         Some(path) => {
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent)?;
             }
             write_yara_hits(&path, &all_hits)
                 .context("failed to write yara_hits.parquet")?;
-            path.display().to_string()
+            fs::read(&path).context("failed to re-read yara_hits.parquet for hashing")?
         }
         None => {
             let tmp = tempfile::NamedTempFile::new()?;
             write_yara_hits(tmp.path(), &all_hits)
                 .context("failed to write yara_hits.parquet")?;
             let bytes = fs::read(tmp.path())?;
-            container.write_bytes(rel_output, &bytes)?;
-            format!("{}/{}", container.display(), rel_output)
+            container.write_bytes(&rel_output, &bytes)?;
+            bytes
         }
     };
-    println!("Written:     {output_display}");
+    println!("Written:     {rel_output}");
+
+    let output_sha256 = format!("sha256:{}", hex_sha256(&output_bytes));
+    let result_manifest = ResultManifest {
+        job_id: job.job_id.clone(),
+        task: job.task.clone(),
+        created_at: Utc::now().to_rfc3339(),
+        tool: ToolInfo {
+            name: TOOL_NAME.to_string(),
+            version: TOOL_VERSION.to_string(),
+        },
+        input: ResultManifestInput {
+            container_id: manifest.container_id,
+            source_sha256: manifest.hashes.source_sha256,
+            merkle_root_sha256: manifest.hashes.merkle_root_sha256,
+            scope_ref: None,
+            chunk_count: scoped_chunks.len(),
+        },
+        outputs: vec![ResultManifestOutput {
+            path: rel_output.clone(),
+            sha256: output_sha256,
+            schema: YARA_HIT_SCHEMA.to_string(),
+        }],
+    };
+    let result_manifest_json = serde_json::to_vec_pretty(&result_manifest)
+        .context("failed to serialize result_manifest.json")?;
+    container
+        .write_bytes(&rel_result_manifest, &result_manifest_json)
+        .context("failed to write result_manifest.json")?;
+    println!("Written:     {rel_result_manifest}");
 
     // ── Provenance ────────────────────────────────────────────────────────
     append_provenance(
@@ -172,7 +241,8 @@ fn main() -> Result<()> {
             "ruleset_hash": ruleset_hash,
             "chunks_scanned": scoped_chunks.len(),
             "hits_found": all_hits.len(),
-            "output": output_display,
+            "output": rel_output,
+            "result_manifest": rel_result_manifest,
         }),
     )?;
 
@@ -220,4 +290,15 @@ fn append_provenance(
             Ok(())
         }
     }
+}
+
+fn analysis_job_dir(job_id: &str) -> Result<String> {
+    let job_id = job_id.trim();
+    if job_id.is_empty() {
+        anyhow::bail!("job_id is empty");
+    }
+    if job_id.contains('/') || job_id.contains('\\') || job_id.contains("..") {
+        anyhow::bail!("job_id contains invalid path characters");
+    }
+    Ok(format!("analysis/jobs/{job_id}"))
 }

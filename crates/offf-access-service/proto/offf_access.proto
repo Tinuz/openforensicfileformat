@@ -10,6 +10,7 @@ service OfffAccessService {
   rpc GetFile(GetFileRequest) returns (GetFileResponse);
   rpc ListArtifacts(ListArtifactsRequest) returns (ListArtifactsResponse);
   rpc WriteAnalysisResults(WriteAnalysisResultsRequest) returns (WriteAnalysisResultsResponse);
+  rpc AppendAnalysisCorrection(AppendAnalysisCorrectionRequest) returns (AppendAnalysisCorrectionResponse);
   rpc AppendProvenanceEvent(AppendProvenanceEventRequest) returns (AppendProvenanceEventResponse);
 }
 
@@ -67,6 +68,22 @@ message WriteAnalysisResultsRequest {
 message WriteAnalysisResultsResponse {
   bool ok = 1;
   string path = 2;
+}
+
+message AppendAnalysisCorrectionRequest {
+  string case_id = 1;
+  string actor = 2;
+  string correction_of = 3;
+  string correction_type = 4;
+  string reason = 5;
+  string provenance_ref = 6;
+}
+
+message AppendAnalysisCorrectionResponse {
+  bool ok = 1;
+  string event_id = 2;
+  string timestamp = 3;
+  string path = 4;
 }
 
 message AppendProvenanceEventRequest {

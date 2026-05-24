@@ -66,10 +66,14 @@ P0 - Direct oppakken
   - Done: 2026-05-23
   - Progress: `offf-verify` ondersteunt nu `--profile` + `--report`; conformance-profiel schrijft machine-readable JSON rapport; `leaves.parquet` wordt sequence/hash-gewijs vergeleken met `physical_to_chunk`; provenance checks valideren JSON parsebaarheid, verplichte velden, unieke `event_id` en monotone `evt-` ordering
 
-- [ ] Hardening Sprint 6: append-only analysis model (P0)
+- [x] Hardening Sprint 6: append-only analysis model (P0)
   - Move worker outputs to `analysis/jobs/{job_id}/...`
   - Add per-job `result_manifest.json` with output artifact hashes
   - Add correction events as append-only records (no in-place mutations)
+  - Added: 2026-05-24
+  - Status: done
+  - Done: 2026-05-24
+  - Progress: `offf-keyword-worker` en `offf-yara-worker` schrijven nu naar `analysis/jobs/{job_id}/...`, weigeren overschrijven van bestaande job-artifacts, en schrijven per job een `result_manifest.json` met SHA-256 van outputbestanden; provenance verwijst naar output + result manifest. `offf-access-service` ondersteunt append-only correction events via REST (`/analysis-corrections`) en gRPC (`AppendAnalysisCorrection`) naar `analysis/events/analysis_events.jsonl`
 
 - [ ] Hardening Sprint 7: Access Service production auth + denied audit (P0)
   - Add `OFFF_AUTH_MODE=dev_headers|jwt|mtls`

@@ -5,6 +5,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+use chrono::Utc;
 use arrow::{
     array::{BooleanArray, StringArray, UInt64Array},
     record_batch::RecordBatch,
@@ -31,11 +32,12 @@ use tower_http::trace::TraceLayer;
 use offf_access_service::grpc;
 use grpc::offf_access_service_server::{OfffAccessService, OfffAccessServiceServer};
 use grpc::{
+    AppendAnalysisCorrectionRequest, AppendAnalysisCorrectionResponse,
     AppendProvenanceEventRequest, AppendProvenanceEventResponse, FileRow, GetChunkRequest,
     GetChunkResponse, GetFileRequest, GetFileResponse, GetManifestRequest, GetManifestResponse,
     ListArtifactsRequest, ListArtifactsResponse, ListFilesRequest, ListFilesResponse,
-    VerifyChunkRequest, VerifyChunkResponse as GrpcVerifyChunkResponse, WriteAnalysisResultsRequest,
-    WriteAnalysisResultsResponse,
+    VerifyChunkRequest, VerifyChunkResponse as GrpcVerifyChunkResponse,
+    WriteAnalysisResultsRequest, WriteAnalysisResultsResponse,
 };
 
 #[derive(Clone)]
@@ -71,6 +73,10 @@ impl AppRole {
 
     fn can_append_provenance(self) -> bool {
         matches!(self, Self::AnalysisWorker | Self::Indexer | Self::AcquisitionProducer)
+    }
+
+    fn can_append_analysis_correction(self) -> bool {
+        matches!(self, Self::AnalysisWorker | Self::Reporter)
     }
 }
 
@@ -133,6 +139,15 @@ struct ProvenanceEventRequest {
     tool_version: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct AnalysisCorrectionRequest {
+    actor: String,
+    correction_of: String,
+    correction_type: String,
+    reason: String,
+    provenance_ref: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 struct VerifyChunkResponse {
     ok: bool,
@@ -149,6 +164,14 @@ struct AppendProvenanceResponse {
     ok: bool,
     event_id: String,
     timestamp: String,
+}
+
+#[derive(Debug, Serialize)]
+struct AppendAnalysisCorrectionJsonResponse {
+    ok: bool,
+    event_id: String,
+    timestamp: String,
+    path: String,
 }
 
 #[tokio::main]
@@ -181,6 +204,7 @@ async fn main() -> Result<()> {
         .route("/cases/{case_id}/files/{file_id}", get(get_file))
         .route("/cases/{case_id}/artifacts", get(list_artifacts))
         .route("/cases/{case_id}/analysis-results", post(write_analysis_results))
+        .route("/cases/{case_id}/analysis-corrections", post(append_analysis_correction))
         .route("/cases/{case_id}/provenance-events", post(append_provenance_event))
         .layer(TraceLayer::new_for_http())
         .with_state(state.clone());
@@ -399,6 +423,60 @@ impl OfffAccessService for GrpcAccessService {
             timestamp: appended.timestamp,
         }))
     }
+
+    async fn append_analysis_correction(
+        &self,
+        request: Request<AppendAnalysisCorrectionRequest>,
+    ) -> Result<GrpcResponse<AppendAnalysisCorrectionResponse>, Status> {
+        let actor = actor_from_metadata(request.metadata()).map_err(grpc_status_from_auth)?;
+        if !actor.role.can_append_analysis_correction() {
+            tracing::warn!(
+                action = "grpc_append_analysis_correction",
+                tool_id = %actor.tool_id,
+                role = ?actor.role,
+                outcome = "deny",
+                reason = "role cannot append analysis correction"
+            );
+            return Err(Status::new(
+                Code::PermissionDenied,
+                "role not allowed to append analysis correction",
+            ));
+        }
+        enforce_tool_registry(&self.state, &actor, WriteLayer::Analysis).map_err(grpc_status)?;
+
+        let req = request.into_inner();
+        let case_ref = resolve_case_ref(&self.state, &req.case_id).map_err(grpc_status)?;
+        let appended = append_analysis_correction_event(
+            &case_ref,
+            &req.actor,
+            &req.correction_of,
+            &req.correction_type,
+            &req.reason,
+            if req.provenance_ref.trim().is_empty() {
+                None
+            } else {
+                Some(req.provenance_ref)
+            },
+        )
+        .map_err(grpc_status)?;
+
+        tracing::info!(
+            action = "grpc_append_analysis_correction",
+            case_id = %req.case_id,
+            tool_id = %actor.tool_id,
+            role = ?actor.role,
+            outcome = "allow",
+            event_id = %appended.event_id,
+            path = %appended.path,
+        );
+
+        Ok(GrpcResponse::new(AppendAnalysisCorrectionResponse {
+            ok: true,
+            event_id: appended.event_id,
+            timestamp: appended.timestamp,
+            path: appended.path,
+        }))
+    }
 }
 
 async fn get_manifest(
@@ -549,6 +627,56 @@ async fn append_provenance_event(
         ok: true,
         event_id: appended.event_id,
         timestamp: appended.timestamp,
+    }))
+}
+
+async fn append_analysis_correction(
+    State(state): State<AppState>,
+    AxPath(case_id): AxPath<String>,
+    headers: HeaderMap,
+    Json(payload): Json<AnalysisCorrectionRequest>,
+) -> Result<Json<AppendAnalysisCorrectionJsonResponse>, ApiError> {
+    let actor = actor_from_headers(&headers)?;
+    if !actor.role.can_append_analysis_correction() {
+        tracing::warn!(
+            action = "append_analysis_correction",
+            case_id = %case_id,
+            tool_id = %actor.tool_id,
+            role = ?actor.role,
+            outcome = "deny",
+            reason = "role cannot append analysis correction"
+        );
+        return Err(ApiError::forbidden(
+            "role not allowed to append analysis correction",
+        ));
+    }
+    enforce_tool_registry(&state, &actor, WriteLayer::Analysis)?;
+
+    let case_ref = resolve_case_ref(&state, &case_id)?;
+    let appended = append_analysis_correction_event(
+        &case_ref,
+        &payload.actor,
+        &payload.correction_of,
+        &payload.correction_type,
+        &payload.reason,
+        payload.provenance_ref,
+    )?;
+
+    tracing::info!(
+        action = "append_analysis_correction",
+        case_id = %case_id,
+        tool_id = %actor.tool_id,
+        role = ?actor.role,
+        outcome = "allow",
+        event_id = %appended.event_id,
+        path = %appended.path,
+    );
+
+    Ok(Json(AppendAnalysisCorrectionJsonResponse {
+        ok: true,
+        event_id: appended.event_id,
+        timestamp: appended.timestamp,
+        path: appended.path,
     }))
 }
 
@@ -714,6 +842,86 @@ fn role_name(role: AppRole) -> &'static str {
 struct AppendedProvenance {
     event_id: String,
     timestamp: String,
+}
+
+struct AppendedAnalysisEvent {
+    event_id: String,
+    timestamp: String,
+    path: String,
+}
+
+fn append_analysis_correction_event(
+    case_ref: &ContainerRef,
+    actor: &str,
+    correction_of: &str,
+    correction_type: &str,
+    reason: &str,
+    provenance_ref: Option<String>,
+) -> Result<AppendedAnalysisEvent, ApiError> {
+    if actor.trim().is_empty() {
+        return Err(ApiError::bad_request("actor must not be empty"));
+    }
+    if correction_of.trim().is_empty() {
+        return Err(ApiError::bad_request("correction_of must not be empty"));
+    }
+    if correction_type.trim().is_empty() {
+        return Err(ApiError::bad_request("correction_type must not be empty"));
+    }
+    if reason.trim().is_empty() {
+        return Err(ApiError::bad_request("reason must not be empty"));
+    }
+
+    let rel = "analysis/events/analysis_events.jsonl";
+    let counter = case_ref
+        .read_text(rel)
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .count()
+        + 1;
+    let timestamp = Utc::now().to_rfc3339();
+
+    let mut event = serde_json::Map::new();
+    event.insert(
+        "event_id".to_string(),
+        Value::String(format!("analysis-correction-{counter:06}")),
+    );
+    event.insert("timestamp".to_string(), Value::String(timestamp.clone()));
+    event.insert("actor".to_string(), Value::String(actor.trim().to_string()));
+    event.insert(
+        "correction_of".to_string(),
+        Value::String(correction_of.trim().to_string()),
+    );
+    event.insert(
+        "correction_type".to_string(),
+        Value::String(correction_type.trim().to_string()),
+    );
+    event.insert("reason".to_string(), Value::String(reason.trim().to_string()));
+    if let Some(prov) = provenance_ref.and_then(|v| {
+        let trimmed = v.trim().to_string();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    }) {
+        event.insert("provenance_ref".to_string(), Value::String(prov));
+    }
+
+    let event_value = Value::Object(event);
+    case_ref
+        .append_jsonl_line(rel, &serde_json::to_string(&event_value)?)
+        .map_err(ApiError::from)?;
+
+    Ok(AppendedAnalysisEvent {
+        event_id: event_value
+            .get("event_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        timestamp,
+        path: rel.to_string(),
+    })
 }
 
 fn append_provenance(

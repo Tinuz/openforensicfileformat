@@ -122,9 +122,9 @@ def smoke_env() -> dict[str, str]:
     return env
 
 
-def make_keyword_job(path: Path) -> None:
+def make_keyword_job(path: Path, job_id: str = "job-smoke-keyword") -> None:
     payload = {
-        "job_id": "job-smoke-keyword",
+        "job_id": job_id,
         "created_at": "2026-05-23T00:00:00Z",
         "case_id": "urn:offf:case:smoke",
         "task": "keyword_scan",
@@ -138,9 +138,9 @@ def make_keyword_job(path: Path) -> None:
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
-def make_yara_job(path: Path) -> None:
+def make_yara_job(path: Path, job_id: str = "job-smoke-yara") -> None:
     payload = {
-        "job_id": "job-smoke-yara",
+        "job_id": job_id,
         "created_at": "2026-05-23T00:00:00Z",
         "case_id": "urn:offf:case:smoke",
         "task": "yara_scan",
@@ -173,16 +173,23 @@ def keyword_worker_exe() -> Path:
     return exe
 
 
-def run_concurrent_keyword_workers(env: dict[str, str], job_path: Path, workers: int = 4) -> None:
+def run_concurrent_keyword_workers(env: dict[str, str], base_job_path: Path, workers: int = 4) -> None:
     exe = keyword_worker_exe()
+    base_job = json.loads(base_job_path.read_text(encoding="utf-8"))
     procs: list[subprocess.Popen[str]] = []
+    job_paths: list[Path] = []
     for idx in range(workers):
+        job_path = base_job_path.parent / f"keyword_job_{idx}.json"
+        payload = dict(base_job)
+        payload["job_id"] = f"job-smoke-keyword-concurrent-{idx}"
+        job_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        job_paths.append(job_path)
         cmd = [
             str(exe),
             "--case",
             CASE_URI,
             "--job",
-            str(job_path),
+            str(job_paths[-1]),
             "--worker-id",
             f"concurrent-{idx}",
         ]
@@ -261,8 +268,10 @@ def main() -> int:
             env=env,
         )
 
-        object_exists(f"{PREFIX}/analysis/keyword_hits.parquet")
-        object_exists(f"{PREFIX}/analysis/yara_hits.parquet")
+        object_exists(f"{PREFIX}/analysis/jobs/job-smoke-keyword/keyword_hits.parquet")
+        object_exists(f"{PREFIX}/analysis/jobs/job-smoke-keyword/result_manifest.json")
+        object_exists(f"{PREFIX}/analysis/jobs/job-smoke-yara/yara_hits.parquet")
+        object_exists(f"{PREFIX}/analysis/jobs/job-smoke-yara/result_manifest.json")
 
         run(["cargo", "build", "-p", "offf-keyword-worker"], env=env)
         before = read_provenance_lines()
