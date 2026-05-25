@@ -414,6 +414,104 @@ class OfffContainer:
             details=details,
         )
 
+    # ── Object-producing worker methods (Sprint 11) ──────────────────────────
+
+    def write_object_delta(self, job_id: str, rows: list[dict[str, Any]]) -> Path:
+        """Write an objects_delta.jsonl for *job_id* (immutable; raises if it already exists)."""
+        return self._write_delta_artifact(job_id, "objects_delta", rows)
+
+    def write_edge_delta(self, job_id: str, rows: list[dict[str, Any]]) -> Path:
+        """Write an object_edges_delta.jsonl for *job_id* (immutable)."""
+        return self._write_delta_artifact(job_id, "object_edges_delta", rows)
+
+    def write_derivation_delta(self, job_id: str, rows: list[dict[str, Any]]) -> Path:
+        """Write a derivations_delta.jsonl for *job_id* (immutable)."""
+        return self._write_delta_artifact(job_id, "derivations_delta", rows)
+
+    def _write_delta_artifact(
+        self, job_id: str, artifact: str, rows: list[dict[str, Any]]
+    ) -> Path:
+        job_id = job_id.strip()
+        if not job_id or "/" in job_id or "\\" in job_id or ".." in job_id:
+            raise OfffError("invalid job_id")
+        target = self.base_path / "analysis" / "jobs" / job_id / f"{artifact}.jsonl"
+        if target.exists():
+            raise OfffError(f"refusing to overwrite existing artifact: {target}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("w", encoding="utf-8") as f:
+            for row in rows:
+                f.write(json.dumps(row, ensure_ascii=False))
+                f.write("\n")
+        return target
+
+    def materialize_derived_object(self, data: bytes) -> str:
+        """Content-addressed write to derived/objects/sha256/<xx>/<xx>/<hex>.bin.
+
+        Returns ``sha256:<hex>``.  If the object already exists the stored hash
+        is verified and the digest is returned without overwriting.
+        """
+        digest = hashlib.sha256(data).hexdigest()
+        rel_dir = self.base_path / "derived" / "objects" / "sha256" / digest[:2] / digest[2:4]
+        target = rel_dir / f"{digest}.bin"
+        if target.exists():
+            stored = hashlib.sha256(target.read_bytes()).hexdigest()
+            if stored != digest:
+                raise OfffError(
+                    f"derived object hash mismatch for {digest}: stored={stored}"
+                )
+            return f"sha256:{digest}"
+        rel_dir.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        return f"sha256:{digest}"
+
+    def read_derived_object(self, sha256: str) -> bytes:
+        """Read a derived/materialized object by ``sha256:<hex>`` reference.
+
+        Raises :class:`OfffError` when the object is missing or its stored hash
+        does not match.
+        """
+        if ":" in sha256:
+            _, hex_digest = sha256.split(":", 1)
+        else:
+            hex_digest = sha256
+        target = (
+            self.base_path
+            / "derived"
+            / "objects"
+            / "sha256"
+            / hex_digest[:2]
+            / hex_digest[2:4]
+            / f"{hex_digest}.bin"
+        )
+        if not target.exists():
+            raise OfffError(f"derived object not found: {sha256}")
+        data = target.read_bytes()
+        actual = hashlib.sha256(data).hexdigest()
+        if actual != hex_digest:
+            raise OfffError(
+                f"derived object hash mismatch for {sha256}: stored={actual}"
+            )
+        return data
+
+    def read_objects(self) -> list[dict[str, Any]]:
+        """Read ``indexes/objects/object_index.parquet`` → list of dicts."""
+        return self._read_parquet_as_dicts("indexes/objects/object_index.parquet")
+
+    def read_object_edges(self) -> list[dict[str, Any]]:
+        """Read ``indexes/objects/object_edges.parquet`` → list of dicts."""
+        return self._read_parquet_as_dicts("indexes/objects/object_edges.parquet")
+
+    def read_derivations(self) -> list[dict[str, Any]]:
+        """Read ``indexes/objects/derivations.parquet`` → list of dicts."""
+        return self._read_parquet_as_dicts("indexes/objects/derivations.parquet")
+
+    def _read_parquet_as_dicts(self, rel: str) -> list[dict[str, Any]]:
+        path = self.base_path / rel
+        if not path.exists():
+            return []
+        table = pq.read_table(path)
+        return table.to_pydict() and table.to_pandas().to_dict(orient="records")
+
 
 def _merkle_root_from_hex_leaves(leaves: list[str]) -> str:
     level = [_hex_to_bytes32(h) for h in leaves]

@@ -14,8 +14,9 @@ use axum::{
 };
 use chrono::Utc;
 use offf_core::{
+    chunk::hex_sha256,
     parquet_io::read_physical_to_chunk_bytes,
-    storage::{read_chunk_verified, ContainerRef},
+    storage::{read_chunk_verified, read_derived_object, write_derived_object, ContainerRef},
     types::{ChunkMetadata, ManifestJson, ToolInfo},
 };
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -30,9 +31,15 @@ use grpc::{
     AppendAnalysisCorrectionRequest, AppendAnalysisCorrectionResponse,
     AppendProvenanceEventRequest, AppendProvenanceEventResponse, FileRow, GetChunkRequest,
     GetChunkResponse, GetFileRequest, GetFileResponse, GetManifestRequest, GetManifestResponse,
+    GetObjectChildrenRequest, GetObjectChildrenResponse, GetObjectContentRequest,
+    GetObjectContentResponse, GetObjectLineageRequest, GetObjectLineageResponse,
+    GetObjectParentsRequest, GetObjectParentsResponse, GetObjectsRequest, GetObjectsResponse,
     ListArtifactsRequest, ListArtifactsResponse, ListFilesRequest, ListFilesResponse,
     VerifyChunkRequest, VerifyChunkResponse as GrpcVerifyChunkResponse,
-    WriteAnalysisResultsRequest, WriteAnalysisResultsResponse,
+    WriteAnalysisResultsRequest, WriteAnalysisResultsResponse, WriteDerivationDeltaRequest,
+    WriteDerivationDeltaResponse, WriteMaterializedObjectRequest, WriteMaterializedObjectResponse,
+    WriteObjectDeltaRequest, WriteObjectDeltaResponse, WriteObjectEdgeDeltaRequest,
+    WriteObjectEdgeDeltaResponse,
 };
 use offf_access_service::grpc;
 
@@ -139,6 +146,8 @@ struct ToolRegistration {
     status: String,
     allowed_roles: Vec<String>,
     write_layers: Vec<String>,
+    #[serde(default)]
+    capabilities: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -218,6 +227,24 @@ struct AppendAnalysisCorrectionJsonResponse {
     path: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct ObjectDeltaRequest {
+    rows: Vec<Value>,
+}
+
+#[derive(Debug, Serialize)]
+struct ObjectDeltaResponse {
+    ok: bool,
+    path: String,
+    sha256: String,
+}
+
+#[derive(Debug, Serialize)]
+struct WriteMaterializedObjectRestResponse {
+    ok: bool,
+    sha256: String,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -267,6 +294,40 @@ async fn main() -> Result<()> {
         .route(
             "/cases/{case_id}/provenance-events",
             post(append_provenance_event),
+        )
+        // Object-producing worker endpoints (Sprint 11)
+        .route(
+            "/cases/{case_id}/analysis/jobs/{job_id}/objects",
+            post(rest_write_object_delta),
+        )
+        .route(
+            "/cases/{case_id}/analysis/jobs/{job_id}/object-edges",
+            post(rest_write_object_edge_delta),
+        )
+        .route(
+            "/cases/{case_id}/analysis/jobs/{job_id}/derivations",
+            post(rest_write_derivation_delta),
+        )
+        .route(
+            "/cases/{case_id}/analysis/jobs/{job_id}/materialized-objects",
+            post(rest_write_materialized_object),
+        )
+        .route("/cases/{case_id}/objects", get(rest_get_objects))
+        .route(
+            "/cases/{case_id}/objects/{object_id}/children",
+            get(rest_get_object_children),
+        )
+        .route(
+            "/cases/{case_id}/objects/{object_id}/parents",
+            get(rest_get_object_parents),
+        )
+        .route(
+            "/cases/{case_id}/objects/{object_id}/lineage",
+            get(rest_get_object_lineage),
+        )
+        .route(
+            "/cases/{case_id}/objects/{object_id}/content",
+            get(rest_get_object_content),
         )
         .layer(TraceLayer::new_for_http())
         .with_state(state.clone());
@@ -633,6 +694,348 @@ impl OfffAccessService for GrpcAccessService {
             path: appended.path,
         }))
     }
+
+    // ── Object-producing worker RPCs (Sprint 11) ──────────────────────────
+
+    async fn write_object_delta(
+        &self,
+        request: Request<WriteObjectDeltaRequest>,
+    ) -> Result<GrpcResponse<WriteObjectDeltaResponse>, Status> {
+        let actor = match actor_from_metadata(self.state.auth_mode, request.metadata()) {
+            Ok(a) => a,
+            Err(err) => {
+                log_denied_write_best_effort(
+                    &self.state,
+                    &request.get_ref().case_id,
+                    "grpc_write_object_delta",
+                    "authentication failed",
+                    None,
+                );
+                return Err(grpc_status_from_auth(err));
+            }
+        };
+        if !actor.role.can_write_analysis() {
+            log_denied_write_best_effort(
+                &self.state,
+                &request.get_ref().case_id,
+                "grpc_write_object_delta",
+                "role cannot write analysis",
+                Some(&actor),
+            );
+            return Err(Status::new(
+                Code::PermissionDenied,
+                "role not allowed to write analysis layer",
+            ));
+        }
+        enforce_tool_registry(&self.state, &actor, WriteLayer::Analysis)
+            .inspect_err(|err| {
+                log_denied_write_best_effort(
+                    &self.state,
+                    &request.get_ref().case_id,
+                    "grpc_write_object_delta",
+                    &err.message,
+                    Some(&actor),
+                );
+            })
+            .map_err(grpc_status)?;
+        enforce_capability(&self.state, &actor, "may_produce_objects")
+            .inspect_err(|err| {
+                log_denied_write_best_effort(
+                    &self.state,
+                    &request.get_ref().case_id,
+                    "grpc_write_object_delta",
+                    &err.message,
+                    Some(&actor),
+                );
+            })
+            .map_err(grpc_status)?;
+        let req = request.into_inner();
+        let case_ref = resolve_case_ref(&self.state, &req.case_id).map_err(grpc_status)?;
+        let rows: Result<Vec<Value>, _> = req
+            .rows
+            .iter()
+            .map(|r| serde_json::from_str::<Value>(&r.json))
+            .collect();
+        let rows = rows.map_err(|e| Status::new(Code::InvalidArgument, e.to_string()))?;
+        let (path, sha256) =
+            write_object_delta_rows(&case_ref, &req.job_id, "objects_delta", &rows)
+                .map_err(grpc_status)?;
+        Ok(GrpcResponse::new(WriteObjectDeltaResponse {
+            ok: true,
+            path,
+            sha256,
+        }))
+    }
+
+    async fn write_object_edge_delta(
+        &self,
+        request: Request<WriteObjectEdgeDeltaRequest>,
+    ) -> Result<GrpcResponse<WriteObjectEdgeDeltaResponse>, Status> {
+        let actor = match actor_from_metadata(self.state.auth_mode, request.metadata()) {
+            Ok(a) => a,
+            Err(err) => {
+                log_denied_write_best_effort(
+                    &self.state,
+                    &request.get_ref().case_id,
+                    "grpc_write_object_edge_delta",
+                    "authentication failed",
+                    None,
+                );
+                return Err(grpc_status_from_auth(err));
+            }
+        };
+        if !actor.role.can_write_analysis() {
+            log_denied_write_best_effort(
+                &self.state,
+                &request.get_ref().case_id,
+                "grpc_write_object_edge_delta",
+                "role cannot write analysis",
+                Some(&actor),
+            );
+            return Err(Status::new(
+                Code::PermissionDenied,
+                "role not allowed to write analysis layer",
+            ));
+        }
+        enforce_tool_registry(&self.state, &actor, WriteLayer::Analysis)
+            .inspect_err(|err| {
+                log_denied_write_best_effort(
+                    &self.state,
+                    &request.get_ref().case_id,
+                    "grpc_write_object_edge_delta",
+                    &err.message,
+                    Some(&actor),
+                );
+            })
+            .map_err(grpc_status)?;
+        enforce_capability(&self.state, &actor, "may_produce_edges")
+            .inspect_err(|err| {
+                log_denied_write_best_effort(
+                    &self.state,
+                    &request.get_ref().case_id,
+                    "grpc_write_object_edge_delta",
+                    &err.message,
+                    Some(&actor),
+                );
+            })
+            .map_err(grpc_status)?;
+        let req = request.into_inner();
+        let case_ref = resolve_case_ref(&self.state, &req.case_id).map_err(grpc_status)?;
+        let rows: Result<Vec<Value>, _> = req
+            .rows
+            .iter()
+            .map(|r| serde_json::from_str::<Value>(&r.json))
+            .collect();
+        let rows = rows.map_err(|e| Status::new(Code::InvalidArgument, e.to_string()))?;
+        let (path, sha256) =
+            write_object_delta_rows(&case_ref, &req.job_id, "object_edges_delta", &rows)
+                .map_err(grpc_status)?;
+        Ok(GrpcResponse::new(WriteObjectEdgeDeltaResponse {
+            ok: true,
+            path,
+            sha256,
+        }))
+    }
+
+    async fn write_derivation_delta(
+        &self,
+        request: Request<WriteDerivationDeltaRequest>,
+    ) -> Result<GrpcResponse<WriteDerivationDeltaResponse>, Status> {
+        let actor = match actor_from_metadata(self.state.auth_mode, request.metadata()) {
+            Ok(a) => a,
+            Err(err) => {
+                log_denied_write_best_effort(
+                    &self.state,
+                    &request.get_ref().case_id,
+                    "grpc_write_derivation_delta",
+                    "authentication failed",
+                    None,
+                );
+                return Err(grpc_status_from_auth(err));
+            }
+        };
+        if !actor.role.can_write_analysis() {
+            log_denied_write_best_effort(
+                &self.state,
+                &request.get_ref().case_id,
+                "grpc_write_derivation_delta",
+                "role cannot write analysis",
+                Some(&actor),
+            );
+            return Err(Status::new(
+                Code::PermissionDenied,
+                "role not allowed to write analysis layer",
+            ));
+        }
+        enforce_tool_registry(&self.state, &actor, WriteLayer::Analysis)
+            .inspect_err(|err| {
+                log_denied_write_best_effort(
+                    &self.state,
+                    &request.get_ref().case_id,
+                    "grpc_write_derivation_delta",
+                    &err.message,
+                    Some(&actor),
+                );
+            })
+            .map_err(grpc_status)?;
+        enforce_capability(&self.state, &actor, "may_produce_derivations")
+            .inspect_err(|err| {
+                log_denied_write_best_effort(
+                    &self.state,
+                    &request.get_ref().case_id,
+                    "grpc_write_derivation_delta",
+                    &err.message,
+                    Some(&actor),
+                );
+            })
+            .map_err(grpc_status)?;
+        let req = request.into_inner();
+        let case_ref = resolve_case_ref(&self.state, &req.case_id).map_err(grpc_status)?;
+        let rows: Result<Vec<Value>, _> = req
+            .rows
+            .iter()
+            .map(|r| serde_json::from_str::<Value>(&r.json))
+            .collect();
+        let rows = rows.map_err(|e| Status::new(Code::InvalidArgument, e.to_string()))?;
+        let (path, sha256) =
+            write_object_delta_rows(&case_ref, &req.job_id, "derivations_delta", &rows)
+                .map_err(grpc_status)?;
+        Ok(GrpcResponse::new(WriteDerivationDeltaResponse {
+            ok: true,
+            path,
+            sha256,
+        }))
+    }
+
+    async fn write_materialized_object(
+        &self,
+        request: Request<WriteMaterializedObjectRequest>,
+    ) -> Result<GrpcResponse<WriteMaterializedObjectResponse>, Status> {
+        let actor = match actor_from_metadata(self.state.auth_mode, request.metadata()) {
+            Ok(a) => a,
+            Err(err) => {
+                log_denied_write_best_effort(
+                    &self.state,
+                    &request.get_ref().case_id,
+                    "grpc_write_materialized_object",
+                    "authentication failed",
+                    None,
+                );
+                return Err(grpc_status_from_auth(err));
+            }
+        };
+        if !actor.role.can_write_analysis() {
+            log_denied_write_best_effort(
+                &self.state,
+                &request.get_ref().case_id,
+                "grpc_write_materialized_object",
+                "role cannot write analysis",
+                Some(&actor),
+            );
+            return Err(Status::new(
+                Code::PermissionDenied,
+                "role not allowed to write analysis layer",
+            ));
+        }
+        enforce_tool_registry(&self.state, &actor, WriteLayer::Analysis)
+            .inspect_err(|err| {
+                log_denied_write_best_effort(
+                    &self.state,
+                    &request.get_ref().case_id,
+                    "grpc_write_materialized_object",
+                    &err.message,
+                    Some(&actor),
+                );
+            })
+            .map_err(grpc_status)?;
+        enforce_capability(&self.state, &actor, "may_materialize_objects")
+            .inspect_err(|err| {
+                log_denied_write_best_effort(
+                    &self.state,
+                    &request.get_ref().case_id,
+                    "grpc_write_materialized_object",
+                    &err.message,
+                    Some(&actor),
+                );
+            })
+            .map_err(grpc_status)?;
+        let req = request.into_inner();
+        let case_ref = resolve_case_ref(&self.state, &req.case_id).map_err(grpc_status)?;
+        let sha256 = write_derived_object(&case_ref, &req.content)
+            .map_err(ApiError::from)
+            .map_err(grpc_status)?;
+        tracing::info!(
+            action = "grpc_write_materialized_object",
+            case_id = %req.case_id,
+            tool_id = %actor.tool_id,
+            sha256 = %sha256,
+            outcome = "allow",
+        );
+        Ok(GrpcResponse::new(WriteMaterializedObjectResponse {
+            ok: true,
+            sha256,
+        }))
+    }
+
+    async fn get_objects(
+        &self,
+        request: Request<GetObjectsRequest>,
+    ) -> Result<GrpcResponse<GetObjectsResponse>, Status> {
+        let req = request.into_inner();
+        let case_ref = resolve_case_ref(&self.state, &req.case_id).map_err(grpc_status)?;
+        let rows = read_object_index_values(&case_ref).map_err(grpc_status)?;
+        let rows_json: Result<Vec<String>, _> = rows.iter().map(serde_json::to_string).collect();
+        let rows_json = rows_json.map_err(|e| Status::new(Code::Internal, e.to_string()))?;
+        Ok(GrpcResponse::new(GetObjectsResponse { rows_json }))
+    }
+
+    async fn get_object_children(
+        &self,
+        request: Request<GetObjectChildrenRequest>,
+    ) -> Result<GrpcResponse<GetObjectChildrenResponse>, Status> {
+        let req = request.into_inner();
+        let case_ref = resolve_case_ref(&self.state, &req.case_id).map_err(grpc_status)?;
+        let rows = read_object_children(&case_ref, &req.object_id).map_err(grpc_status)?;
+        let rows_json: Result<Vec<String>, _> = rows.iter().map(serde_json::to_string).collect();
+        let rows_json = rows_json.map_err(|e| Status::new(Code::Internal, e.to_string()))?;
+        Ok(GrpcResponse::new(GetObjectChildrenResponse { rows_json }))
+    }
+
+    async fn get_object_parents(
+        &self,
+        request: Request<GetObjectParentsRequest>,
+    ) -> Result<GrpcResponse<GetObjectParentsResponse>, Status> {
+        let req = request.into_inner();
+        let case_ref = resolve_case_ref(&self.state, &req.case_id).map_err(grpc_status)?;
+        let rows = read_object_parents(&case_ref, &req.object_id).map_err(grpc_status)?;
+        let rows_json: Result<Vec<String>, _> = rows.iter().map(serde_json::to_string).collect();
+        let rows_json = rows_json.map_err(|e| Status::new(Code::Internal, e.to_string()))?;
+        Ok(GrpcResponse::new(GetObjectParentsResponse { rows_json }))
+    }
+
+    async fn get_object_lineage(
+        &self,
+        request: Request<GetObjectLineageRequest>,
+    ) -> Result<GrpcResponse<GetObjectLineageResponse>, Status> {
+        let req = request.into_inner();
+        let case_ref = resolve_case_ref(&self.state, &req.case_id).map_err(grpc_status)?;
+        let rows = read_object_lineage(&case_ref, &req.object_id).map_err(grpc_status)?;
+        let rows_json: Result<Vec<String>, _> = rows.iter().map(serde_json::to_string).collect();
+        let rows_json = rows_json.map_err(|e| Status::new(Code::Internal, e.to_string()))?;
+        Ok(GrpcResponse::new(GetObjectLineageResponse { rows_json }))
+    }
+
+    async fn get_object_content(
+        &self,
+        request: Request<GetObjectContentRequest>,
+    ) -> Result<GrpcResponse<GetObjectContentResponse>, Status> {
+        let req = request.into_inner();
+        let case_ref = resolve_case_ref(&self.state, &req.case_id).map_err(grpc_status)?;
+        let content = read_derived_object(&case_ref, &req.sha256)
+            .map_err(ApiError::from)
+            .map_err(grpc_status)?;
+        Ok(GrpcResponse::new(GetObjectContentResponse { content }))
+    }
 }
 
 async fn get_manifest(
@@ -934,6 +1337,412 @@ async fn append_analysis_correction(
     }))
 }
 
+// ── Object-producing worker REST handlers (Sprint 11) ─────────────────────────
+
+async fn rest_write_object_delta(
+    State(state): State<AppState>,
+    AxPath((case_id, job_id)): AxPath<(String, String)>,
+    headers: HeaderMap,
+    Json(payload): Json<ObjectDeltaRequest>,
+) -> Result<Json<ObjectDeltaResponse>, ApiError> {
+    let actor = actor_from_headers(state.auth_mode, &headers).inspect_err(|err| {
+        log_denied_write_best_effort(&state, &case_id, "write_object_delta", &err.message, None);
+    })?;
+    if !actor.role.can_write_analysis() {
+        log_denied_write_best_effort(
+            &state,
+            &case_id,
+            "write_object_delta",
+            "role cannot write analysis",
+            Some(&actor),
+        );
+        return Err(ApiError::forbidden(
+            "role not allowed to write analysis layer",
+        ));
+    }
+    enforce_tool_registry(&state, &actor, WriteLayer::Analysis).inspect_err(|err| {
+        log_denied_write_best_effort(
+            &state,
+            &case_id,
+            "write_object_delta",
+            &err.message,
+            Some(&actor),
+        );
+    })?;
+    enforce_capability(&state, &actor, "may_produce_objects").inspect_err(|err| {
+        log_denied_write_best_effort(
+            &state,
+            &case_id,
+            "write_object_delta",
+            &err.message,
+            Some(&actor),
+        );
+    })?;
+    let case_ref = resolve_case_ref(&state, &case_id)?;
+    let (path, sha256) =
+        write_object_delta_rows(&case_ref, &job_id, "objects_delta", &payload.rows)?;
+    tracing::info!(action = "write_object_delta", case_id = %case_id, tool_id = %actor.tool_id, outcome = "allow", path = %path);
+    Ok(Json(ObjectDeltaResponse {
+        ok: true,
+        path,
+        sha256,
+    }))
+}
+
+async fn rest_write_object_edge_delta(
+    State(state): State<AppState>,
+    AxPath((case_id, job_id)): AxPath<(String, String)>,
+    headers: HeaderMap,
+    Json(payload): Json<ObjectDeltaRequest>,
+) -> Result<Json<ObjectDeltaResponse>, ApiError> {
+    let actor = actor_from_headers(state.auth_mode, &headers).inspect_err(|err| {
+        log_denied_write_best_effort(
+            &state,
+            &case_id,
+            "write_object_edge_delta",
+            &err.message,
+            None,
+        );
+    })?;
+    if !actor.role.can_write_analysis() {
+        log_denied_write_best_effort(
+            &state,
+            &case_id,
+            "write_object_edge_delta",
+            "role cannot write analysis",
+            Some(&actor),
+        );
+        return Err(ApiError::forbidden(
+            "role not allowed to write analysis layer",
+        ));
+    }
+    enforce_tool_registry(&state, &actor, WriteLayer::Analysis).inspect_err(|err| {
+        log_denied_write_best_effort(
+            &state,
+            &case_id,
+            "write_object_edge_delta",
+            &err.message,
+            Some(&actor),
+        );
+    })?;
+    enforce_capability(&state, &actor, "may_produce_edges").inspect_err(|err| {
+        log_denied_write_best_effort(
+            &state,
+            &case_id,
+            "write_object_edge_delta",
+            &err.message,
+            Some(&actor),
+        );
+    })?;
+    let case_ref = resolve_case_ref(&state, &case_id)?;
+    let (path, sha256) =
+        write_object_delta_rows(&case_ref, &job_id, "object_edges_delta", &payload.rows)?;
+    tracing::info!(action = "write_object_edge_delta", case_id = %case_id, tool_id = %actor.tool_id, outcome = "allow", path = %path);
+    Ok(Json(ObjectDeltaResponse {
+        ok: true,
+        path,
+        sha256,
+    }))
+}
+
+async fn rest_write_derivation_delta(
+    State(state): State<AppState>,
+    AxPath((case_id, job_id)): AxPath<(String, String)>,
+    headers: HeaderMap,
+    Json(payload): Json<ObjectDeltaRequest>,
+) -> Result<Json<ObjectDeltaResponse>, ApiError> {
+    let actor = actor_from_headers(state.auth_mode, &headers).inspect_err(|err| {
+        log_denied_write_best_effort(
+            &state,
+            &case_id,
+            "write_derivation_delta",
+            &err.message,
+            None,
+        );
+    })?;
+    if !actor.role.can_write_analysis() {
+        log_denied_write_best_effort(
+            &state,
+            &case_id,
+            "write_derivation_delta",
+            "role cannot write analysis",
+            Some(&actor),
+        );
+        return Err(ApiError::forbidden(
+            "role not allowed to write analysis layer",
+        ));
+    }
+    enforce_tool_registry(&state, &actor, WriteLayer::Analysis).inspect_err(|err| {
+        log_denied_write_best_effort(
+            &state,
+            &case_id,
+            "write_derivation_delta",
+            &err.message,
+            Some(&actor),
+        );
+    })?;
+    enforce_capability(&state, &actor, "may_produce_derivations").inspect_err(|err| {
+        log_denied_write_best_effort(
+            &state,
+            &case_id,
+            "write_derivation_delta",
+            &err.message,
+            Some(&actor),
+        );
+    })?;
+    let case_ref = resolve_case_ref(&state, &case_id)?;
+    let (path, sha256) =
+        write_object_delta_rows(&case_ref, &job_id, "derivations_delta", &payload.rows)?;
+    tracing::info!(action = "write_derivation_delta", case_id = %case_id, tool_id = %actor.tool_id, outcome = "allow", path = %path);
+    Ok(Json(ObjectDeltaResponse {
+        ok: true,
+        path,
+        sha256,
+    }))
+}
+
+async fn rest_write_materialized_object(
+    State(state): State<AppState>,
+    AxPath((case_id, job_id)): AxPath<(String, String)>,
+    headers: HeaderMap,
+    body: bytes::Bytes,
+) -> Result<Json<WriteMaterializedObjectRestResponse>, ApiError> {
+    let actor = actor_from_headers(state.auth_mode, &headers).inspect_err(|err| {
+        log_denied_write_best_effort(
+            &state,
+            &case_id,
+            "write_materialized_object",
+            &err.message,
+            None,
+        );
+    })?;
+    if !actor.role.can_write_analysis() {
+        log_denied_write_best_effort(
+            &state,
+            &case_id,
+            "write_materialized_object",
+            "role cannot write analysis",
+            Some(&actor),
+        );
+        return Err(ApiError::forbidden(
+            "role not allowed to write analysis layer",
+        ));
+    }
+    enforce_tool_registry(&state, &actor, WriteLayer::Analysis).inspect_err(|err| {
+        log_denied_write_best_effort(
+            &state,
+            &case_id,
+            "write_materialized_object",
+            &err.message,
+            Some(&actor),
+        );
+    })?;
+    enforce_capability(&state, &actor, "may_materialize_objects").inspect_err(|err| {
+        log_denied_write_best_effort(
+            &state,
+            &case_id,
+            "write_materialized_object",
+            &err.message,
+            Some(&actor),
+        );
+    })?;
+    let _ = normalize_job_id(&job_id)?;
+    let case_ref = resolve_case_ref(&state, &case_id)?;
+    let sha256 = write_derived_object(&case_ref, &body).map_err(ApiError::from)?;
+    tracing::info!(action = "write_materialized_object", case_id = %case_id, tool_id = %actor.tool_id, sha256 = %sha256, outcome = "allow");
+    Ok(Json(WriteMaterializedObjectRestResponse {
+        ok: true,
+        sha256,
+    }))
+}
+
+async fn rest_get_objects(
+    State(state): State<AppState>,
+    AxPath(case_id): AxPath<String>,
+) -> Result<Json<Vec<Value>>, ApiError> {
+    let case_ref = resolve_case_ref(&state, &case_id)?;
+    Ok(Json(read_object_index_values(&case_ref)?))
+}
+
+async fn rest_get_object_children(
+    State(state): State<AppState>,
+    AxPath((case_id, object_id)): AxPath<(String, String)>,
+) -> Result<Json<Vec<Value>>, ApiError> {
+    let case_ref = resolve_case_ref(&state, &case_id)?;
+    Ok(Json(read_object_children(&case_ref, &object_id)?))
+}
+
+async fn rest_get_object_parents(
+    State(state): State<AppState>,
+    AxPath((case_id, object_id)): AxPath<(String, String)>,
+) -> Result<Json<Vec<Value>>, ApiError> {
+    let case_ref = resolve_case_ref(&state, &case_id)?;
+    Ok(Json(read_object_parents(&case_ref, &object_id)?))
+}
+
+async fn rest_get_object_lineage(
+    State(state): State<AppState>,
+    AxPath((case_id, object_id)): AxPath<(String, String)>,
+) -> Result<Json<Vec<Value>>, ApiError> {
+    let case_ref = resolve_case_ref(&state, &case_id)?;
+    Ok(Json(read_object_lineage(&case_ref, &object_id)?))
+}
+
+async fn rest_get_object_content(
+    State(state): State<AppState>,
+    AxPath((case_id, sha256)): AxPath<(String, String)>,
+) -> Result<AxumResponse, ApiError> {
+    let case_ref = resolve_case_ref(&state, &case_id)?;
+    let content = read_derived_object(&case_ref, &sha256).map_err(ApiError::from)?;
+    Ok((
+        [(header::CONTENT_TYPE, "application/octet-stream")],
+        content,
+    )
+        .into_response())
+}
+
+// ── Object-producing helpers ──────────────────────────────────────────────────
+
+fn normalize_job_id(job_id: &str) -> Result<String, ApiError> {
+    let j = job_id.trim();
+    if j.is_empty() || j.contains('/') || j.contains("..") || j.contains('\\') {
+        return Err(ApiError::bad_request("invalid job_id"));
+    }
+    Ok(j.to_string())
+}
+
+fn write_object_delta_rows(
+    case_ref: &ContainerRef,
+    job_id: &str,
+    artifact: &str,
+    rows: &[Value],
+) -> Result<(String, String), ApiError> {
+    let job_id_clean = normalize_job_id(job_id)?;
+    let rel = format!("analysis/jobs/{job_id_clean}/{artifact}.jsonl");
+    if case_ref.exists(&rel).map_err(ApiError::from)? {
+        return Err(ApiError::forbidden(format!(
+            "refusing to overwrite existing artifact: {rel}"
+        )));
+    }
+    let mut content = String::new();
+    for row in rows {
+        content.push_str(&serde_json::to_string(row)?);
+        content.push('\n');
+    }
+    let data = content.as_bytes();
+    let sha256 = format!("sha256:{}", hex_sha256(data));
+    case_ref.write_bytes(&rel, data).map_err(ApiError::from)?;
+    Ok((rel, sha256))
+}
+
+fn enforce_capability(
+    state: &AppState,
+    actor: &ActorContext,
+    capability: &str,
+) -> Result<(), ApiError> {
+    let registry = load_tool_registry(Path::new(&state.tool_registry_path))?;
+    let rec = registry
+        .tools
+        .iter()
+        .find(|t| t.tool_id == actor.tool_id)
+        .ok_or_else(|| ApiError::forbidden(format!("tool not registered: {}", actor.tool_id)))?;
+    if !rec
+        .capabilities
+        .iter()
+        .any(|c| c.eq_ignore_ascii_case(capability))
+    {
+        return Err(ApiError::forbidden(format!(
+            "tool does not have capability {capability}: {}",
+            actor.tool_id
+        )));
+    }
+    Ok(())
+}
+
+fn read_object_index_values(case_ref: &ContainerRef) -> Result<Vec<Value>, ApiError> {
+    let rel = "indexes/objects/object_index.parquet";
+    if !case_ref.exists(rel).map_err(ApiError::from)? {
+        return Ok(vec![]);
+    }
+    let data = case_ref.read_bytes(rel).map_err(ApiError::from)?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(data))?;
+    let reader = builder.build()?;
+    let mut out = Vec::new();
+    for batch in reader {
+        out.extend(batch_to_json_rows(&batch?)?);
+    }
+    Ok(out)
+}
+
+fn read_object_edges_values(case_ref: &ContainerRef) -> Result<Vec<Value>, ApiError> {
+    let rel = "indexes/objects/object_edges.parquet";
+    if !case_ref.exists(rel).map_err(ApiError::from)? {
+        return Ok(vec![]);
+    }
+    let data = case_ref.read_bytes(rel).map_err(ApiError::from)?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(data))?;
+    let reader = builder.build()?;
+    let mut out = Vec::new();
+    for batch in reader {
+        out.extend(batch_to_json_rows(&batch?)?);
+    }
+    Ok(out)
+}
+
+fn read_object_children(case_ref: &ContainerRef, object_id: &str) -> Result<Vec<Value>, ApiError> {
+    let edges = read_object_edges_values(case_ref)?;
+    Ok(edges
+        .into_iter()
+        .filter(|e| {
+            e.get("parent_object_id")
+                .and_then(|v| v.as_str())
+                .map(|id| id == object_id)
+                .unwrap_or(false)
+        })
+        .collect())
+}
+
+fn read_object_parents(case_ref: &ContainerRef, object_id: &str) -> Result<Vec<Value>, ApiError> {
+    let edges = read_object_edges_values(case_ref)?;
+    Ok(edges
+        .into_iter()
+        .filter(|e| {
+            e.get("child_object_id")
+                .and_then(|v| v.as_str())
+                .map(|id| id == object_id)
+                .unwrap_or(false)
+        })
+        .collect())
+}
+
+fn read_object_lineage(case_ref: &ContainerRef, object_id: &str) -> Result<Vec<Value>, ApiError> {
+    let edges = read_object_edges_values(case_ref)?;
+    let mut lineage: Vec<Value> = Vec::new();
+    let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut queue: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+    queue.push_back(object_id.to_string());
+    while let Some(current) = queue.pop_front() {
+        if !visited.insert(current.clone()) {
+            continue;
+        }
+        for edge in &edges {
+            let child = edge
+                .get("child_object_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let parent = edge
+                .get("parent_object_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            if child == current && !visited.contains(parent) {
+                lineage.push(edge.clone());
+                queue.push_back(parent.to_string());
+            }
+        }
+    }
+    Ok(lineage)
+}
+
 fn list_file_index_values(
     case_ref: &ContainerRef,
     partition_id: Option<&str>,
@@ -968,6 +1777,11 @@ fn write_analysis_rows(
     if !rel.starts_with("analysis/jobs/") {
         return Err(ApiError::bad_request(
             "relative_path must start with analysis/jobs/",
+        ));
+    }
+    if rel.starts_with("indexes/") {
+        return Err(ApiError::bad_request(
+            "direct writes to indexes/ are denied; use the object-delta endpoints",
         ));
     }
     if !rel.ends_with(".jsonl") {

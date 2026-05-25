@@ -243,9 +243,7 @@ fn cmd_create_object_worker(
         created_at: Utc::now(),
         case_id,
         task: task.to_string(),
-        scope: JobScope {
-            chunks: chunk_ids,
-        },
+        scope: JobScope { chunks: chunk_ids },
         tool: ToolInfo {
             name: tool_name.to_string(),
             version: tool_version.to_string(),

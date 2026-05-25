@@ -133,13 +133,15 @@ P0 - Direct oppakken
     - `result_manifest.json` written last
   - Extend worker output directory contract under `analysis/jobs/{job_id}/...`
   - Added: 2026-05-24
-  - Status: planned
+  - Status: done
+  - Done: 2026-05-25
+  - Progress: `offf-core::storage` bevat nu `derived_object_path`, `write_derived_object` (hash-verify op reuse) en `read_derived_object`; `offf-keyword-worker` en `offf-yara-worker` gebruiken v0.2 result manifest met `status`, `statistics`, `errors.jsonl` collectie via error-tolerante scan (for_each/match ipv try_for_each); `offf-jobs` ondersteunt nu `create-object-worker` subcommand met volledige `output_contract` vlaggen
   - Acceptance:
     - workers can produce results-only or object-producing outputs via one contract
     - materialized objects never written to evidence/chunks layer
     - result manifest is finalization point and hash-complete
 
-- [ ] Lineage Sprint 11: SDK + Access API for object-producing jobs (P0)
+- [x] Lineage Sprint 11: SDK + Access API for object-producing jobs (P0) ✅ 2026-05-26
   - Add SDK APIs:
     - `write_object_delta`, `write_edge_delta`, `write_derivation_delta`
     - `materialize_derived_object`
@@ -153,7 +155,8 @@ P0 - Direct oppakken
   - Extend tool registry capabilities for object-producing workers
   - Enforce capability vs `output_contract` checks at write time
   - Added: 2026-05-24
-  - Status: planned
+  - Status: in-progress
+  - Progress: gestart 2026-05-25
   - Acceptance:
     - writes to `indexes/objects/*` directly are denied
     - denied writes are audited append-only

@@ -12,6 +12,16 @@ service OfffAccessService {
   rpc WriteAnalysisResults(WriteAnalysisResultsRequest) returns (WriteAnalysisResultsResponse);
   rpc AppendAnalysisCorrection(AppendAnalysisCorrectionRequest) returns (AppendAnalysisCorrectionResponse);
   rpc AppendProvenanceEvent(AppendProvenanceEventRequest) returns (AppendProvenanceEventResponse);
+  // Object-producing worker RPCs (Sprint 11)
+  rpc WriteObjectDelta(WriteObjectDeltaRequest) returns (WriteObjectDeltaResponse);
+  rpc WriteObjectEdgeDelta(WriteObjectEdgeDeltaRequest) returns (WriteObjectEdgeDeltaResponse);
+  rpc WriteDerivationDelta(WriteDerivationDeltaRequest) returns (WriteDerivationDeltaResponse);
+  rpc WriteMaterializedObject(WriteMaterializedObjectRequest) returns (WriteMaterializedObjectResponse);
+  rpc GetObjects(GetObjectsRequest) returns (GetObjectsResponse);
+  rpc GetObjectChildren(GetObjectChildrenRequest) returns (GetObjectChildrenResponse);
+  rpc GetObjectParents(GetObjectParentsRequest) returns (GetObjectParentsResponse);
+  rpc GetObjectLineage(GetObjectLineageRequest) returns (GetObjectLineageResponse);
+  rpc GetObjectContent(GetObjectContentRequest) returns (GetObjectContentResponse);
 }
 
 message GetManifestRequest { string case_id = 1; }
@@ -100,3 +110,77 @@ message AppendProvenanceEventResponse {
   string event_id = 2;
   string timestamp = 3;
 }
+
+// ── Object-producing worker messages (Sprint 11) ──────────────────────────────
+
+message ObjectRow { string json = 1; }
+
+message WriteObjectDeltaRequest {
+  string case_id = 1;
+  string job_id = 2;
+  repeated ObjectRow rows = 3;
+}
+message WriteObjectDeltaResponse {
+  bool ok = 1;
+  string path = 2;
+  string sha256 = 3;
+}
+
+message WriteObjectEdgeDeltaRequest {
+  string case_id = 1;
+  string job_id = 2;
+  repeated ObjectRow rows = 3;
+}
+message WriteObjectEdgeDeltaResponse {
+  bool ok = 1;
+  string path = 2;
+  string sha256 = 3;
+}
+
+message WriteDerivationDeltaRequest {
+  string case_id = 1;
+  string job_id = 2;
+  repeated ObjectRow rows = 3;
+}
+message WriteDerivationDeltaResponse {
+  bool ok = 1;
+  string path = 2;
+  string sha256 = 3;
+}
+
+message WriteMaterializedObjectRequest {
+  string case_id = 1;
+  string job_id = 2;
+  bytes content = 3;
+}
+message WriteMaterializedObjectResponse {
+  bool ok = 1;
+  string sha256 = 2;
+}
+
+message GetObjectsRequest { string case_id = 1; }
+message GetObjectsResponse { repeated string rows_json = 1; }
+
+message GetObjectChildrenRequest {
+  string case_id = 1;
+  string object_id = 2;
+}
+message GetObjectChildrenResponse { repeated string rows_json = 1; }
+
+message GetObjectParentsRequest {
+  string case_id = 1;
+  string object_id = 2;
+}
+message GetObjectParentsResponse { repeated string rows_json = 1; }
+
+message GetObjectLineageRequest {
+  string case_id = 1;
+  string object_id = 2;
+}
+message GetObjectLineageResponse { repeated string rows_json = 1; }
+
+message GetObjectContentRequest {
+  string case_id = 1;
+  string sha256 = 2;
+}
+message GetObjectContentResponse { bytes content = 1; }

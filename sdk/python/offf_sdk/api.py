@@ -54,3 +54,43 @@ def append_provenance_event(
         tool_name=tool_name,
         tool_version=tool_version,
     )
+
+
+# ── Object-producing worker convenience functions (Sprint 11) ─────────────────
+
+def write_object_delta(
+    container: OfffContainer, job_id: str, rows: list[dict[str, Any]]
+) -> Path:
+    return container.write_object_delta(job_id, rows)
+
+
+def write_edge_delta(
+    container: OfffContainer, job_id: str, rows: list[dict[str, Any]]
+) -> Path:
+    return container.write_edge_delta(job_id, rows)
+
+
+def write_derivation_delta(
+    container: OfffContainer, job_id: str, rows: list[dict[str, Any]]
+) -> Path:
+    return container.write_derivation_delta(job_id, rows)
+
+
+def materialize_derived_object(container: OfffContainer, data: bytes) -> str:
+    return container.materialize_derived_object(data)
+
+
+def read_objects(container: OfffContainer) -> list[dict[str, Any]]:
+    return container.read_objects()
+
+
+def read_object_edges(container: OfffContainer) -> list[dict[str, Any]]:
+    return container.read_object_edges()
+
+
+def read_derivations(container: OfffContainer) -> list[dict[str, Any]]:
+    return container.read_derivations()
+
+
+def read_derived_object(container: OfffContainer, sha256: str) -> bytes:
+    return container.read_derived_object(sha256)

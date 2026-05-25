@@ -11,6 +11,18 @@
       "status": "approved",
       "allowed_roles": ["viewer"],
       "write_layers": []
+    },
+    {
+      "tool_id": "example-object-worker",
+      "status": "approved",
+      "allowed_roles": ["analysis_worker"],
+      "write_layers": ["analysis"],
+      "capabilities": [
+        "may_produce_objects",
+        "may_produce_edges",
+        "may_produce_derivations",
+        "may_materialize_objects"
+      ]
     }
   ]
 }
