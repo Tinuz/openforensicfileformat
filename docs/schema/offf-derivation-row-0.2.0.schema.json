@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://offf.dev/schema/offf-derivation-row-0.2.0.schema.json",
+  "title": "OFFF Derivation Row v0.2.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "derivation_id",
+    "parent_object_id",
+    "child_object_id",
+    "job_id",
+    "method",
+    "tool_id",
+    "tool_name",
+    "tool_version",
+    "storage_mode",
+    "created_at",
+    "schema_version"
+  ],
+  "properties": {
+    "derivation_id": { "type": "string", "minLength": 1 },
+    "parent_object_id": { "type": "string", "minLength": 1 },
+    "child_object_id": { "type": "string", "minLength": 1 },
+    "job_id": { "type": "string", "minLength": 1 },
+    "method": { "type": "string", "minLength": 1 },
+    "tool_id": { "type": "string", "minLength": 1 },
+    "tool_name": { "type": "string", "minLength": 1 },
+    "tool_version": { "type": "string", "minLength": 1 },
+    "parameters_hash": {
+      "type": ["string", "null"],
+      "pattern": "^(sha256:[0-9a-f]{64})?$"
+    },
+    "input_sha256": {
+      "type": ["string", "null"],
+      "pattern": "^(sha256:[0-9a-f]{64})?$"
+    },
+    "output_sha256": {
+      "type": ["string", "null"],
+      "pattern": "^(sha256:[0-9a-f]{64})?$"
+    },
+    "storage_mode": {
+      "type": "string",
+      "enum": ["referenced_only", "materialized"]
+    },
+    "provenance_ref": { "type": ["string", "null"], "minLength": 1 },
+    "created_at": { "type": "string", "format": "date-time" },
+    "schema_version": { "type": "string", "const": "0.2.0" }
+  }
+}

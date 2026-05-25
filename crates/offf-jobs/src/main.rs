@@ -197,6 +197,8 @@ fn cmd_create_keyword(
             name: "offf-keyword-worker".to_string(),
             version: TOOL_VERSION.to_string(),
         },
+        input_scope: None,
+        output_contract: None,
         parameters: serde_json::json!({
             "keywords": keywords,
             "encoding": encodings,
@@ -243,6 +245,8 @@ fn cmd_create_yara(case: &Path, rules_path: &Path, chunks_arg: &str, output: &Pa
             name: "offf-yara-worker".to_string(),
             version: TOOL_VERSION.to_string(),
         },
+        input_scope: None,
+        output_contract: None,
         parameters: serde_json::json!({
             "rules_path": rules_path.display().to_string(),
             "rules_hash": format!("sha256:{rules_hash}"),
@@ -610,6 +614,8 @@ mod tests {
                 name: "t".to_string(),
                 version: "1".to_string(),
             },
+            input_scope: None,
+            output_contract: None,
             parameters: serde_json::json!({"k": ["x"]}),
         };
         let raw = serde_json::to_string(&job).unwrap();

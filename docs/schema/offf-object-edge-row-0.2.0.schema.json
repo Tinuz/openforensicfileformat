@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://offf.dev/schema/offf-object-edge-row-0.2.0.schema.json",
+  "title": "OFFF Object Edge Row v0.2.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "edge_id",
+    "parent_object_id",
+    "child_object_id",
+    "relation_type",
+    "schema_version"
+  ],
+  "properties": {
+    "edge_id": { "type": "string", "minLength": 1 },
+    "parent_object_id": { "type": "string", "minLength": 1 },
+    "child_object_id": { "type": "string", "minLength": 1 },
+    "relation_type": {
+      "type": "string",
+      "enum": [
+        "contains",
+        "extracted_from",
+        "attached_to",
+        "embedded_in",
+        "parsed_from",
+        "derived_from",
+        "references"
+      ]
+    },
+    "method": { "type": ["string", "null"] },
+    "logical_path": { "type": ["string", "null"] },
+    "sequence": { "type": ["integer", "null"], "minimum": 0 },
+    "created_by_job_id": { "type": ["string", "null"], "minLength": 1 },
+    "provenance_ref": { "type": ["string", "null"], "minLength": 1 },
+    "schema_version": { "type": "string", "const": "0.2.0" }
+  }
+}

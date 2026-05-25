@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://offf.dev/schema/offf-object-index-row-0.2.0.schema.json",
+  "title": "OFFF Object Index Row v0.2.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "object_id",
+    "object_type",
+    "source_layer",
+    "parser_status",
+    "schema_version"
+  ],
+  "properties": {
+    "object_id": { "type": "string", "minLength": 1 },
+    "object_type": { "type": "string", "minLength": 1 },
+    "name": { "type": ["string", "null"] },
+    "logical_path": { "type": ["string", "null"] },
+    "media_type": { "type": ["string", "null"] },
+    "size_bytes": { "type": ["integer", "null"], "minimum": 0 },
+    "sha256": {
+      "type": ["string", "null"],
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "source_layer": {
+      "type": "string",
+      "enum": ["evidence", "derived_object", "analysis"]
+    },
+    "storage_ref": { "type": ["string", "null"] },
+    "root_source_ref": { "type": ["string", "null"] },
+    "created_by_job_id": { "type": ["string", "null"], "minLength": 1 },
+    "parser_status": {
+      "type": "string",
+      "enum": ["success", "partial", "error", "unknown"]
+    },
+    "provenance_ref": { "type": ["string", "null"], "minLength": 1 },
+    "schema_version": { "type": "string", "const": "0.2.0" }
+  }
+}

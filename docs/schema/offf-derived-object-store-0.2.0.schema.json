@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://offf.dev/schema/offf-derived-object-store-0.2.0.schema.json",
+  "title": "OFFF Derived Object Store Entry v0.2.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["object_id", "storage_mode", "schema_version"],
+  "properties": {
+    "object_id": { "type": "string", "minLength": 1 },
+    "storage_mode": {
+      "type": "string",
+      "enum": ["referenced_only", "materialized"]
+    },
+    "storage_ref": { "type": ["string", "null"] },
+    "sha256": {
+      "type": ["string", "null"],
+      "pattern": "^(sha256:[0-9a-f]{64})?$"
+    },
+    "size_bytes": { "type": ["integer", "null"], "minimum": 0 },
+    "schema_version": { "type": "string", "const": "0.2.0" }
+  }
+}

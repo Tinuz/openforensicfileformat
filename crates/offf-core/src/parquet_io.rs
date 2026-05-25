@@ -1,7 +1,7 @@
 use std::{fs, path::Path, sync::Arc};
 
 use arrow::{
-    array::{ArrayRef, BooleanArray, StringArray, UInt64Array},
+    array::{Array, ArrayRef, BooleanArray, StringArray, UInt64Array},
     datatypes::{DataType, Field, Schema},
     record_batch::RecordBatch,
 };
@@ -13,7 +13,10 @@ use parquet::{
 
 use crate::{
     error::OfffError,
-    types::{ChunkMetadata, FileIndexRow, KeywordHitRow, YaraHitRow},
+    types::{
+        ChunkMetadata, DerivationRow, DiscoveredObjectRow, FileIndexRow, KeywordHitRow,
+        ObjectEdgeRow, YaraHitRow,
+    },
 };
 
 // ── physical_to_chunk.parquet ─────────────────────────────────────────────────
@@ -426,6 +429,349 @@ pub fn write_yara_hits(path: &Path, rows: &[YaraHitRow]) -> Result<(), OfffError
 
     write_batch(path, batch)?;
     Ok(())
+}
+
+// ── indexes/objects/object_index.parquet ─────────────────────────────────────
+
+pub fn write_object_index(path: &Path, rows: &[DiscoveredObjectRow]) -> Result<(), OfffError> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("object_id", DataType::Utf8, false),
+        Field::new("object_type", DataType::Utf8, false),
+        Field::new("name", DataType::Utf8, true),
+        Field::new("logical_path", DataType::Utf8, true),
+        Field::new("media_type", DataType::Utf8, true),
+        Field::new("size_bytes", DataType::UInt64, true),
+        Field::new("sha256", DataType::Utf8, true),
+        Field::new("source_layer", DataType::Utf8, false),
+        Field::new("storage_ref", DataType::Utf8, true),
+        Field::new("root_source_ref", DataType::Utf8, true),
+        Field::new("created_by_job_id", DataType::Utf8, true),
+        Field::new("parser_status", DataType::Utf8, false),
+        Field::new("provenance_ref", DataType::Utf8, true),
+        Field::new("schema_version", DataType::Utf8, false),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| r.object_id.as_str()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| r.object_type.as_str()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter(
+                rows.iter().map(|r| r.name.as_deref()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter(
+                rows.iter().map(|r| r.logical_path.as_deref()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter(
+                rows.iter().map(|r| r.media_type.as_deref()),
+            )) as ArrayRef,
+            Arc::new(UInt64Array::from_iter(rows.iter().map(|r| r.size_bytes))) as ArrayRef,
+            Arc::new(StringArray::from_iter(
+                rows.iter().map(|r| r.sha256.as_deref()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| r.source_layer.as_str()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter(
+                rows.iter().map(|r| r.storage_ref.as_deref()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter(
+                rows.iter().map(|r| r.root_source_ref.as_deref()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter(
+                rows.iter().map(|r| r.created_by_job_id.as_deref()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| r.parser_status.as_str()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter(
+                rows.iter().map(|r| r.provenance_ref.as_deref()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| r.schema_version.as_str()),
+            )) as ArrayRef,
+        ],
+    )?;
+
+    write_batch(path, batch)?;
+    Ok(())
+}
+
+pub fn read_object_index(path: &Path) -> Result<Vec<DiscoveredObjectRow>, OfffError> {
+    let file = fs::File::open(path)?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+    let reader = builder.build()?;
+
+    let mut rows = Vec::new();
+    for batch in reader {
+        let batch = batch?;
+        let n = batch.num_rows();
+        let object_id = as_str_col(&batch, "object_id")?;
+        let object_type = as_str_col(&batch, "object_type")?;
+        let name = as_str_col(&batch, "name")?;
+        let logical_path = as_str_col(&batch, "logical_path")?;
+        let media_type = as_str_col(&batch, "media_type")?;
+        let size_bytes = as_u64_col(&batch, "size_bytes")?;
+        let sha256 = as_str_col(&batch, "sha256")?;
+        let source_layer = as_str_col(&batch, "source_layer")?;
+        let storage_ref = as_str_col(&batch, "storage_ref")?;
+        let root_source_ref = as_str_col(&batch, "root_source_ref")?;
+        let created_by_job_id = as_str_col(&batch, "created_by_job_id")?;
+        let parser_status = as_str_col(&batch, "parser_status")?;
+        let provenance_ref = as_str_col(&batch, "provenance_ref")?;
+        let schema_version = as_str_col(&batch, "schema_version")?;
+
+        for i in 0..n {
+            rows.push(DiscoveredObjectRow {
+                object_id: object_id.value(i).to_string(),
+                object_type: object_type.value(i).to_string(),
+                name: str_value_or_none(name, i),
+                logical_path: str_value_or_none(logical_path, i),
+                media_type: str_value_or_none(media_type, i),
+                size_bytes: u64_value_or_none(size_bytes, i),
+                sha256: str_value_or_none(sha256, i),
+                source_layer: source_layer.value(i).to_string(),
+                storage_ref: str_value_or_none(storage_ref, i),
+                root_source_ref: str_value_or_none(root_source_ref, i),
+                created_by_job_id: str_value_or_none(created_by_job_id, i),
+                parser_status: parser_status.value(i).to_string(),
+                provenance_ref: str_value_or_none(provenance_ref, i),
+                schema_version: schema_version.value(i).to_string(),
+            });
+        }
+    }
+
+    Ok(rows)
+}
+
+// ── indexes/objects/object_edges.parquet ─────────────────────────────────────
+
+pub fn write_object_edges(path: &Path, rows: &[ObjectEdgeRow]) -> Result<(), OfffError> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("edge_id", DataType::Utf8, false),
+        Field::new("parent_object_id", DataType::Utf8, false),
+        Field::new("child_object_id", DataType::Utf8, false),
+        Field::new("relation_type", DataType::Utf8, false),
+        Field::new("method", DataType::Utf8, true),
+        Field::new("logical_path", DataType::Utf8, true),
+        Field::new("sequence", DataType::UInt64, true),
+        Field::new("created_by_job_id", DataType::Utf8, true),
+        Field::new("provenance_ref", DataType::Utf8, true),
+        Field::new("schema_version", DataType::Utf8, false),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| r.edge_id.as_str()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| r.parent_object_id.as_str()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| r.child_object_id.as_str()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| r.relation_type.as_str()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter(
+                rows.iter().map(|r| r.method.as_deref()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter(
+                rows.iter().map(|r| r.logical_path.as_deref()),
+            )) as ArrayRef,
+            Arc::new(UInt64Array::from_iter(rows.iter().map(|r| r.sequence))) as ArrayRef,
+            Arc::new(StringArray::from_iter(
+                rows.iter().map(|r| r.created_by_job_id.as_deref()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter(
+                rows.iter().map(|r| r.provenance_ref.as_deref()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| r.schema_version.as_str()),
+            )) as ArrayRef,
+        ],
+    )?;
+
+    write_batch(path, batch)?;
+    Ok(())
+}
+
+pub fn read_object_edges(path: &Path) -> Result<Vec<ObjectEdgeRow>, OfffError> {
+    let file = fs::File::open(path)?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+    let reader = builder.build()?;
+
+    let mut rows = Vec::new();
+    for batch in reader {
+        let batch = batch?;
+        let n = batch.num_rows();
+        let edge_id = as_str_col(&batch, "edge_id")?;
+        let parent_object_id = as_str_col(&batch, "parent_object_id")?;
+        let child_object_id = as_str_col(&batch, "child_object_id")?;
+        let relation_type = as_str_col(&batch, "relation_type")?;
+        let method = as_str_col(&batch, "method")?;
+        let logical_path = as_str_col(&batch, "logical_path")?;
+        let sequence = as_u64_col(&batch, "sequence")?;
+        let created_by_job_id = as_str_col(&batch, "created_by_job_id")?;
+        let provenance_ref = as_str_col(&batch, "provenance_ref")?;
+        let schema_version = as_str_col(&batch, "schema_version")?;
+
+        for i in 0..n {
+            rows.push(ObjectEdgeRow {
+                edge_id: edge_id.value(i).to_string(),
+                parent_object_id: parent_object_id.value(i).to_string(),
+                child_object_id: child_object_id.value(i).to_string(),
+                relation_type: relation_type.value(i).to_string(),
+                method: str_value_or_none(method, i),
+                logical_path: str_value_or_none(logical_path, i),
+                sequence: u64_value_or_none(sequence, i),
+                created_by_job_id: str_value_or_none(created_by_job_id, i),
+                provenance_ref: str_value_or_none(provenance_ref, i),
+                schema_version: schema_version.value(i).to_string(),
+            });
+        }
+    }
+
+    Ok(rows)
+}
+
+// ── indexes/objects/derivations.parquet ──────────────────────────────────────
+
+pub fn write_derivations(path: &Path, rows: &[DerivationRow]) -> Result<(), OfffError> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("derivation_id", DataType::Utf8, false),
+        Field::new("parent_object_id", DataType::Utf8, false),
+        Field::new("child_object_id", DataType::Utf8, false),
+        Field::new("job_id", DataType::Utf8, false),
+        Field::new("method", DataType::Utf8, false),
+        Field::new("tool_id", DataType::Utf8, false),
+        Field::new("tool_name", DataType::Utf8, false),
+        Field::new("tool_version", DataType::Utf8, false),
+        Field::new("parameters_hash", DataType::Utf8, true),
+        Field::new("input_sha256", DataType::Utf8, true),
+        Field::new("output_sha256", DataType::Utf8, true),
+        Field::new("storage_mode", DataType::Utf8, false),
+        Field::new("provenance_ref", DataType::Utf8, true),
+        Field::new("created_at", DataType::Utf8, false),
+        Field::new("schema_version", DataType::Utf8, false),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| r.derivation_id.as_str()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| r.parent_object_id.as_str()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| r.child_object_id.as_str()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| r.job_id.as_str()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| r.method.as_str()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| r.tool_id.as_str()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| r.tool_name.as_str()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| r.tool_version.as_str()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter(
+                rows.iter().map(|r| r.parameters_hash.as_deref()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter(
+                rows.iter().map(|r| r.input_sha256.as_deref()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter(
+                rows.iter().map(|r| r.output_sha256.as_deref()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| r.storage_mode.as_str()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter(
+                rows.iter().map(|r| r.provenance_ref.as_deref()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| r.created_at.as_str()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| r.schema_version.as_str()),
+            )) as ArrayRef,
+        ],
+    )?;
+
+    write_batch(path, batch)?;
+    Ok(())
+}
+
+pub fn read_derivations(path: &Path) -> Result<Vec<DerivationRow>, OfffError> {
+    let file = fs::File::open(path)?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+    let reader = builder.build()?;
+
+    let mut rows = Vec::new();
+    for batch in reader {
+        let batch = batch?;
+        let n = batch.num_rows();
+        let derivation_id = as_str_col(&batch, "derivation_id")?;
+        let parent_object_id = as_str_col(&batch, "parent_object_id")?;
+        let child_object_id = as_str_col(&batch, "child_object_id")?;
+        let job_id = as_str_col(&batch, "job_id")?;
+        let method = as_str_col(&batch, "method")?;
+        let tool_id = as_str_col(&batch, "tool_id")?;
+        let tool_name = as_str_col(&batch, "tool_name")?;
+        let tool_version = as_str_col(&batch, "tool_version")?;
+        let parameters_hash = as_str_col(&batch, "parameters_hash")?;
+        let input_sha256 = as_str_col(&batch, "input_sha256")?;
+        let output_sha256 = as_str_col(&batch, "output_sha256")?;
+        let storage_mode = as_str_col(&batch, "storage_mode")?;
+        let provenance_ref = as_str_col(&batch, "provenance_ref")?;
+        let created_at = as_str_col(&batch, "created_at")?;
+        let schema_version = as_str_col(&batch, "schema_version")?;
+
+        for i in 0..n {
+            rows.push(DerivationRow {
+                derivation_id: derivation_id.value(i).to_string(),
+                parent_object_id: parent_object_id.value(i).to_string(),
+                child_object_id: child_object_id.value(i).to_string(),
+                job_id: job_id.value(i).to_string(),
+                method: method.value(i).to_string(),
+                tool_id: tool_id.value(i).to_string(),
+                tool_name: tool_name.value(i).to_string(),
+                tool_version: tool_version.value(i).to_string(),
+                parameters_hash: str_value_or_none(parameters_hash, i),
+                input_sha256: str_value_or_none(input_sha256, i),
+                output_sha256: str_value_or_none(output_sha256, i),
+                storage_mode: storage_mode.value(i).to_string(),
+                provenance_ref: str_value_or_none(provenance_ref, i),
+                created_at: created_at.value(i).to_string(),
+                schema_version: schema_version.value(i).to_string(),
+            });
+        }
+    }
+
+    Ok(rows)
+}
+
+fn str_value_or_none(col: &StringArray, i: usize) -> Option<String> {
+    (!col.is_null(i)).then(|| col.value(i).to_string())
+}
+
+fn u64_value_or_none(col: &UInt64Array, i: usize) -> Option<u64> {
+    (!col.is_null(i)).then(|| col.value(i))
 }
 
 #[cfg(test)]

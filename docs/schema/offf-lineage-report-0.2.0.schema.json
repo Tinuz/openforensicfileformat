@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://offf.dev/schema/offf-lineage-report-0.2.0.schema.json",
+  "title": "OFFF Lineage Report v0.2.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["object_id", "valid", "issues", "schema_version"],
+  "properties": {
+    "object_id": { "type": "string", "minLength": 1 },
+    "valid": { "type": "boolean" },
+    "issues": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "lineage_chain": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "schema_version": { "type": "string", "const": "0.2.0" }
+  }
+}

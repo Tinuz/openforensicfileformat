@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "offf_version": "0.2.0",
+  "schemas": {
+    "manifest": "offf-manifest-0.1.0.schema.json",
+    "acquisition": "offf-acquisition-0.1.0.schema.json",
+    "provenance_event": "offf-provenance-event-0.1.0.schema.json",
+    "partition_table": "offf-partition-table-0.1.0.schema.json",
+    "job_manifest": "offf-job-manifest-0.1.0.schema.json",
+    "annotation_event": "offf-annotation-event-0.1.0.schema.json",
+    "file_index_row": "offf-file-index-row-0.1.0.schema.json",
+    "keyword_hit_row": "offf-keyword-hit-row-0.1.0.schema.json",
+    "yara_hit_row": "offf-yara-hit-row-0.1.0.schema.json",
+    "object_index_row": "offf-object-index-row-0.2.0.schema.json",
+    "object_edge_row": "offf-object-edge-row-0.2.0.schema.json",
+    "derivation_row": "offf-derivation-row-0.2.0.schema.json",
+    "derived_object_store": "offf-derived-object-store-0.2.0.schema.json",
+    "lineage_report": "offf-lineage-report-0.2.0.schema.json",
+    "object_producing_result_manifest": "offf-object-producing-result-manifest-0.2.0.schema.json"
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://offf.dev/schema/offf-object-producing-result-manifest-0.2.0.schema.json",
+  "title": "OFFF Object Producing Result Manifest v0.2.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["job_id", "task", "status", "outputs"],
+  "properties": {
+    "job_id": { "type": "string", "minLength": 1 },
+    "task": { "type": "string", "minLength": 1 },
+    "status": { "type": "string", "enum": ["completed", "partial", "failed"] },
+    "worker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool_id", "name", "version"],
+      "properties": {
+        "tool_id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "binary_sha256": {
+          "type": ["string", "null"],
+          "pattern": "^(sha256:[0-9a-f]{64})?$"
+        }
+      }
+    },
+    "outputs": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "object_index_delta": { "type": ["object", "null"] },
+        "object_edges_delta": { "type": ["object", "null"] },
+        "derivations_delta": { "type": ["object", "null"] },
+        "materialized_objects": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["object_id", "storage_ref", "sha256"],
+            "properties": {
+              "object_id": { "type": "string", "minLength": 1 },
+              "storage_ref": { "type": "string", "minLength": 1 },
+              "sha256": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -95,12 +95,151 @@ P0 - Direct oppakken
   - Done: 2026-05-24
   - Progress: `.github/workflows/offf-ci.yml` bevat nu harde quality gates (`fmt`, strikte `clippy`, volledige workspace tests en release build), plus aparte jobs voor conformance en lokale CLI E2E met artifact upload van JSON-rapporten. `tests/e2e/run_cli_e2e.py` voegt een lokale convert->verify->keyword->yara keten toe met machine-readable output (`tests/e2e/cli-e2e-report.json`). Conformance negatieve scenario's zijn dataset-gedreven gemaakt via `tests/conformance/negative_cases.json` en worden machine-readable gerapporteerd
 
+- [ ] Lineage Sprint 9: object lineage core model + schemas (P0)
+  - Add generic OFFF Core row models:
+    - `DiscoveredObjectRow` / object index row
+    - `ObjectEdgeRow`
+    - `DerivationRow`
+    - `ObjectSourceRef` / `ObjectStorageRef`
+  - Add schema set in `docs/schema`:
+    - `offf-object-index-row-0.2.0.schema.json`
+    - `offf-object-edge-row-0.2.0.schema.json`
+    - `offf-derivation-row-0.2.0.schema.json`
+    - `offf-derived-object-store-0.2.0.schema.json`
+    - `offf-lineage-report-0.2.0.schema.json`
+    - `offf-object-producing-result-manifest-0.2.0.schema.json`
+  - Add object indexes locations + IO:
+    - `indexes/objects/object_index.parquet`
+    - `indexes/objects/object_edges.parquet`
+    - `indexes/objects/derivations.parquet`
+  - Add lineage validator primitives (`ObjectLineageValidator`) for referential integrity checks
+  - Added: 2026-05-24
+  - Status: in-progress
+  - Progress: `offf-core` bevat nu generieke object-lineage modellen (`DiscoveredObjectRow`, `ObjectEdgeRow`, `DerivationRow`, `ObjectSourceRef`, `ObjectStorageRef`), Parquet read/write helpers voor `indexes/objects/*`, en validator-primitieven via `ObjectLineageValidator` (referential checks + cycle detectie). `JobManifest` is v0.2-voorbereid met optionele `input_scope` en `output_contract` zonder v0.1-compat te breken. In `docs/schema` zijn de gevraagde 0.2.0 lineage/object-producing schema’s toegevoegd plus een 0.2 catalog.
+  - Acceptance:
+    - `object_index`, `object_edges`, `derivations` schema-validated and loadable
+    - parent/child references validated; missing refs reported
+    - cycle detection available (error or warning by profile)
+
+- [ ] Lineage Sprint 10: derived object store + worker output contract v0.2 (P0)
+  - Implement content-addressed derived object store:
+    - `derived/objects/sha256/ab/cd/<sha256>.bin`
+    - storage modes: `referenced_only` and `materialized`
+    - verify existing bytes on hash collision/reuse
+  - Extend `JobManifest` with generic `output_contract` capabilities
+  - Extend result manifest for object-producing outputs:
+    - `object_index_delta`, `object_edges_delta`, `derivations_delta`, `materialized_objects`
+    - output hashes required for all artifacts
+    - `result_manifest.json` written last
+  - Extend worker output directory contract under `analysis/jobs/{job_id}/...`
+  - Added: 2026-05-24
+  - Status: planned
+  - Acceptance:
+    - workers can produce results-only or object-producing outputs via one contract
+    - materialized objects never written to evidence/chunks layer
+    - result manifest is finalization point and hash-complete
+
+- [ ] Lineage Sprint 11: SDK + Access API for object-producing jobs (P0)
+  - Add SDK APIs:
+    - `write_object_delta`, `write_edge_delta`, `write_derivation_delta`
+    - `materialize_derived_object`
+    - verified object reads and lineage reads
+  - Add Access Service endpoints (append-only, job-scoped):
+    - `POST /cases/{caseId}/analysis/jobs/{jobId}/objects`
+    - `POST /cases/{caseId}/analysis/jobs/{jobId}/object-edges`
+    - `POST /cases/{caseId}/analysis/jobs/{jobId}/derivations`
+    - `POST /cases/{caseId}/analysis/jobs/{jobId}/materialized-objects`
+    - object graph reads (`/objects`, `/children`, `/parents`, `/lineage`, `/content`)
+  - Extend tool registry capabilities for object-producing workers
+  - Enforce capability vs `output_contract` checks at write time
+  - Added: 2026-05-24
+  - Status: planned
+  - Acceptance:
+    - writes to `indexes/objects/*` directly are denied
+    - denied writes are audited append-only
+    - object-producing worker mock passes integration tests
+
+- [ ] Lineage Sprint 12: deterministic object-index rebuild + lineage verify CLI (P0)
+  - Add `offf-index objects <case>` rebuild from job deltas:
+    - read all job deltas
+    - validate schema
+    - deduplicate object conflicts deterministically
+    - rebuild central indexes under `indexes/objects/`
+  - Add `offf-verify <case> --object <obj_id> --lineage`
+  - Validate lineage chain to root evidence/chunks + provenance refs
+  - Add conformance datasets for valid and invalid object graphs
+  - Added: 2026-05-24
+  - Status: planned
+  - Acceptance:
+    - lineage valid/invalid outcomes machine-readable in verify report
+    - missing parent/derivation/hash mismatch detected
+    - index rebuild deterministic and reproducible
+
+Lineage Implementatievolgorde Per Crate (S9-S12)
+-------------------------------------------------
+
+- Wave 1 - `offf-core` + schema baseline (Sprint 9)
+  - `crates/offf-core/src/types.rs`:
+    - add `DiscoveredObjectRow`, `ObjectEdgeRow`, `DerivationRow`
+    - add `ObjectSourceRef`, `ObjectStorageRef`
+    - extend `JobManifest` with `output_contract` + input scope selectors (v0.2)
+  - `crates/offf-core/src/parquet_io.rs`:
+    - add read/write helpers for object rows, edges, derivations
+  - `docs/schema/`:
+    - add v0.2 object-lineage schemas from instructies
+  - `crates/offf-core/src/lib.rs`:
+    - export new object-lineage modules/types
+
+- Wave 2 - worker contract + derived store (Sprint 10)
+  - `crates/offf-core/src/storage.rs`:
+    - add content-addressed derived object read/write verify helpers
+    - enforce immutable verify-on-reuse behavior
+  - `crates/offf-keyword-worker/src/main.rs` and `crates/offf-yara-worker/src/main.rs`:
+    - add `errors.jsonl` emission and result manifest v0.2 output categories
+    - keep result-producing flow backward compatible
+  - `crates/offf-jobs/src/main.rs`:
+    - support creating v0.2 job manifests with `output_contract`
+
+- Wave 3 - access/service + sdk write path (Sprint 11)
+  - `crates/offf-access-service/src/main.rs` + `crates/offf-access-service/proto/offf_access.proto`:
+    - add append-only endpoints/rpcs for objects, object-edges, derivations, materialized-objects
+    - block direct writes to `indexes/objects/*`
+    - enforce capability checks against tool registry + `output_contract`
+  - `config/tool-registry.example.json`:
+    - add object-producing capabilities matrix
+  - `sdk/python/offf_sdk/`:
+    - add SDK methods for object deltas, lineage reads, derived object materialization
+
+- Wave 4 - merge/rebuild + lineage verify (Sprint 12)
+  - `crates/offf-index/src/main.rs`:
+    - add `objects` subcommand for deterministic rebuild from job deltas
+  - `crates/offf-verify/src/main.rs`:
+    - add `--object <id> --lineage` path validation
+    - validate object graph consistency, derivation chain, provenance refs, derived object hashes
+  - `tests/conformance/` + `tests/integration/`:
+    - add positive/negative object-graph datasets and lineage failure cases
+
+- Cross-cutting Definition of Done gates
+  - CI must pass: `fmt`, strict `clippy`, workspace tests, release build
+  - Each wave adds conformance + integration coverage before next wave starts
+  - No direct mutation of evidence layer (`chunks/`, `hashes/`, `maps/`, `manifest.json`, `acquisition.json`)
+
 P1 - Daarna
 -----------
 
 - [ ] OFFF v0.2 manifest extensions foundation (P1)
   - Add optional `extensions` section to `ManifestJson`
   - Add v0.2 schema catalog entries and compatibility tests for v0.1 readers
+
+- [ ] Object graph read/query APIs (P1)
+  - Add list/get/children/parents/lineage endpoints and SDK wrappers
+  - Add graph pagination/filtering for large cases
+  - Add machine-readable lineage report export
+
+- [ ] Legacy compatibility profile for analysis outputs (P1)
+  - Keep v0.1 result layouts readable with verifier warnings
+  - Mark legacy workers/results as non-forensic-grade where required
+  - Provide migration guidance for v0.2 output contract adoption
 
 - [ ] Generic extension types + append-only APIs (P1)
   - Add core structs and schemas: labels, scopes, sets, decisions, policy refs, access/denied/audit events
@@ -127,6 +266,12 @@ P1 - Daarna
 
 P2 - Later
 ----------
+
+- [ ] Object lineage scale/performance program (P2)
+  - Streaming reads for large derived objects
+  - Graph export formats and offline lineage reports
+  - Performance tuning for millions of objects/edges/derivations
+  - Memory-bounded merge/rebuild strategy for object indexes
 
 - [ ] Threat model and security mapping (P2)
   - Add `docs/threat-model.md` with threat-to-mitigation-to-test traceability

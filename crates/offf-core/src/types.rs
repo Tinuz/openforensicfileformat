@@ -96,6 +96,10 @@ pub struct JobManifest {
     pub task: String,
     pub scope: JobScope,
     pub tool: ToolInfo,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_scope: Option<JobInputScope>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_contract: Option<JobOutputContract>,
     /// Task-specific parameters (see per-task docs).
     pub parameters: serde_json::Value,
 }
@@ -104,6 +108,115 @@ pub struct JobManifest {
 pub struct JobScope {
     /// SHA-256 chunk IDs ("sha256:…") or `["*"]` for all chunks.
     pub chunks: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobInputScope {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub target_types: Vec<String>,
+    #[serde(default)]
+    pub selectors: JobInputSelectors,
+    #[serde(default)]
+    pub exclude: JobInputExclude,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct JobInputSelectors {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub object_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub file_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifact_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct JobInputExclude {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sets: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobOutputContract {
+    pub may_produce_results: bool,
+    pub may_produce_objects: bool,
+    pub may_materialize_objects: bool,
+    pub may_produce_edges: bool,
+    pub may_produce_derivations: bool,
+}
+
+// ── Object lineage rows (Phase 9) ───────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObjectSourceRef {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chunk_refs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub root_chunk_refs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_object_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub derivation_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObjectStorageRef {
+    pub storage_mode: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage_ref: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscoveredObjectRow {
+    pub object_id: String,
+    pub object_type: String,
+    pub name: Option<String>,
+    pub logical_path: Option<String>,
+    pub media_type: Option<String>,
+    pub size_bytes: Option<u64>,
+    pub sha256: Option<String>,
+    pub source_layer: String,
+    pub storage_ref: Option<String>,
+    pub root_source_ref: Option<String>,
+    pub created_by_job_id: Option<String>,
+    pub parser_status: String,
+    pub provenance_ref: Option<String>,
+    pub schema_version: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObjectEdgeRow {
+    pub edge_id: String,
+    pub parent_object_id: String,
+    pub child_object_id: String,
+    pub relation_type: String,
+    pub method: Option<String>,
+    pub logical_path: Option<String>,
+    pub sequence: Option<u64>,
+    pub created_by_job_id: Option<String>,
+    pub provenance_ref: Option<String>,
+    pub schema_version: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DerivationRow {
+    pub derivation_id: String,
+    pub parent_object_id: String,
+    pub child_object_id: String,
+    pub job_id: String,
+    pub method: String,
+    pub tool_id: String,
+    pub tool_name: String,
+    pub tool_version: String,
+    pub parameters_hash: Option<String>,
+    pub input_sha256: Option<String>,
+    pub output_sha256: Option<String>,
+    pub storage_mode: String,
+    pub provenance_ref: Option<String>,
+    pub created_at: String,
+    pub schema_version: String,
 }
 
 // ── Analysis hit rows ─────────────────────────────────────────────────────────
