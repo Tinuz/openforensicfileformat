@@ -12,8 +12,12 @@ use sha2::{Digest, Sha256};
 use offf_core::{
     chunk::verify_chunk,
     hash::{generate_merkle_proof, parse_and_validate_merkle_tree, verify_merkle_proof},
-    parquet_io::{read_leaves, read_physical_to_chunk, read_physical_to_chunk_bytes},
-    storage::{read_chunk_verified, ContainerRef},
+    lineage::ObjectLineageValidator,
+    parquet_io::{
+        read_derivations, read_leaves, read_object_edges, read_object_index,
+        read_physical_to_chunk, read_physical_to_chunk_bytes,
+    },
+    storage::{derived_object_path, read_chunk_verified, ContainerRef},
     types::{AcquisitionJson, ManifestJson, OFFF_VERSION},
 };
 
@@ -51,6 +55,17 @@ struct Args {
     /// Optional machine-readable JSON report output path.
     #[arg(long)]
     report: Option<PathBuf>,
+
+    /// Validate the lineage of a specific object (object_id).
+    /// Requires the object indexes to be present.
+    /// Use together with --lineage to enable full lineage chain validation.
+    #[arg(long)]
+    object: Option<String>,
+
+    /// When combined with --object, perform full lineage chain validation:
+    /// referential integrity, derivation hash checks, derived object hash verification.
+    #[arg(long)]
+    lineage: bool,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum, Serialize, PartialEq, Eq)]
@@ -158,6 +173,20 @@ impl VerifyReport {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+
+    if args.object.is_some() || args.lineage {
+        let valid = verify_object_lineage(
+            &args.container,
+            args.object.as_deref(),
+            args.lineage,
+            args.report.as_deref(),
+        )?;
+        if !valid {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
     let valid = verify(
         &args.container,
         args.chunks.as_deref(),
@@ -575,6 +604,313 @@ fn includes_schemas(profile: VerifyProfile) -> bool {
         profile,
         VerifyProfile::CoreSchemas | VerifyProfile::CoreExtensions | VerifyProfile::Conformance
     )
+}
+
+// ── Object lineage verification ───────────────────────────────────────────────
+
+fn verify_object_lineage(
+    container_arg: &str,
+    object_id: Option<&str>,
+    full_lineage: bool,
+    report_path: Option<&std::path::Path>,
+) -> Result<bool> {
+    let container = ContainerRef::parse(container_arg)?;
+    let mut report = VerifyReport {
+        container: container.display(),
+        profile: VerifyProfile::Core,
+        checks: Vec::new(),
+    };
+
+    // ── Load object indexes ───────────────────────────────────────────────
+    let idx_rel = "indexes/objects/object_index.parquet";
+    let edges_rel = "indexes/objects/object_edges.parquet";
+    let deriv_rel = "indexes/objects/derivations.parquet";
+
+    macro_rules! load_parquet {
+        ($rel:expr, $reader:ident, $label:expr) => {{
+            match container.local_path($rel) {
+                Some(p) if p.exists() => match $reader(&p) {
+                    Ok(rows) => {
+                        report.ok(format!("{}: {} row(s)", $label, rows.len()));
+                        rows
+                    }
+                    Err(e) => {
+                        report.fail($label, e.to_string());
+                        vec![]
+                    }
+                },
+                _ => {
+                    report.warn($label, format!("{} not found; treating as empty", $rel));
+                    vec![]
+                }
+            }
+        }};
+    }
+
+    let objects = load_parquet!(idx_rel, read_object_index, "Object index");
+    let edges = load_parquet!(edges_rel, read_object_edges, "Object edges");
+    let derivations = load_parquet!(deriv_rel, read_derivations, "Derivations");
+
+    // ── Validate target object exists ────────────────────────────────────
+    if let Some(oid) = object_id {
+        let found = objects.iter().any(|o| o.object_id == oid);
+        if found {
+            report.ok(format!("Object present: {oid}"));
+        } else {
+            report.fail(
+                "Object present",
+                format!("object_id '{oid}' not found in index"),
+            );
+        }
+    }
+
+    if !full_lineage {
+        let valid = report.is_valid();
+        if let Some(path) = report_path {
+            write_json_report(path, &report, valid)?;
+        }
+        report.print();
+        return Ok(valid);
+    }
+
+    // ── Full lineage: referential integrity ───────────────────────────────
+    let lineage_report = ObjectLineageValidator::validate(&objects, &edges, &derivations);
+
+    if lineage_report.missing_edge_parents.is_empty() {
+        report.ok("Edge parent references valid");
+    } else {
+        report.fail(
+            "Edge parent references",
+            format!(
+                "missing parent objects for edges: {}",
+                lineage_report.missing_edge_parents.join(", ")
+            ),
+        );
+    }
+
+    if lineage_report.missing_edge_children.is_empty() {
+        report.ok("Edge child references valid");
+    } else {
+        report.fail(
+            "Edge child references",
+            format!(
+                "missing child objects for edges: {}",
+                lineage_report.missing_edge_children.join(", ")
+            ),
+        );
+    }
+
+    if lineage_report.missing_derivation_parents.is_empty() {
+        report.ok("Derivation parent references valid");
+    } else {
+        report.fail(
+            "Derivation parent references",
+            format!(
+                "missing parent objects for derivations: {}",
+                lineage_report.missing_derivation_parents.join(", ")
+            ),
+        );
+    }
+
+    if lineage_report.missing_derivation_children.is_empty() {
+        report.ok("Derivation child references valid");
+    } else {
+        report.fail(
+            "Derivation child references",
+            format!(
+                "missing child objects for derivations: {}",
+                lineage_report.missing_derivation_children.join(", ")
+            ),
+        );
+    }
+
+    if lineage_report.invalid_derivation_links.is_empty() {
+        report.ok("Derivation→edge links valid");
+    } else {
+        report.fail(
+            "Derivation→edge links",
+            format!(
+                "derivations without corresponding edge: {}",
+                lineage_report.invalid_derivation_links.join(", ")
+            ),
+        );
+    }
+
+    if lineage_report.cycles.is_empty() {
+        report.ok("Object graph is acyclic");
+    } else {
+        for cycle in &lineage_report.cycles {
+            report.fail(
+                "Object graph cycle detected",
+                format!("cycle: {}", cycle.join(" → ")),
+            );
+        }
+    }
+
+    // ── Derivation hash checks ─────────────────────────────────────────────
+    let object_sha256: HashMap<&str, Option<&str>> = objects
+        .iter()
+        .map(|o| (o.object_id.as_str(), o.sha256.as_deref()))
+        .collect();
+
+    let mut hash_checks_ok = 0usize;
+    let mut hash_checks_fail = 0usize;
+
+    for drv in &derivations {
+        if let Some(expected_input) = &drv.input_sha256 {
+            let actual = object_sha256
+                .get(drv.parent_object_id.as_str())
+                .copied()
+                .flatten();
+            match actual {
+                Some(h) if h == expected_input => {
+                    hash_checks_ok += 1;
+                }
+                Some(h) => {
+                    hash_checks_fail += 1;
+                    report.fail(
+                        "Derivation input hash",
+                        format!(
+                            "derivation {} parent {}: expected {} got {}",
+                            drv.derivation_id,
+                            drv.parent_object_id,
+                            &expected_input[..16.min(expected_input.len())],
+                            &h[..16.min(h.len())]
+                        ),
+                    );
+                }
+                None => {
+                    report.warn(
+                        "Derivation input hash",
+                        format!(
+                            "derivation {} parent {} has no sha256 in index",
+                            drv.derivation_id, drv.parent_object_id
+                        ),
+                    );
+                }
+            }
+        }
+
+        if let Some(expected_output) = &drv.output_sha256 {
+            let actual = object_sha256
+                .get(drv.child_object_id.as_str())
+                .copied()
+                .flatten();
+            match actual {
+                Some(h) if h == expected_output => {
+                    hash_checks_ok += 1;
+                }
+                Some(h) => {
+                    hash_checks_fail += 1;
+                    report.fail(
+                        "Derivation output hash",
+                        format!(
+                            "derivation {} child {}: expected {} got {}",
+                            drv.derivation_id,
+                            drv.child_object_id,
+                            &expected_output[..16.min(expected_output.len())],
+                            &h[..16.min(h.len())]
+                        ),
+                    );
+                }
+                None => {
+                    report.warn(
+                        "Derivation output hash",
+                        format!(
+                            "derivation {} child {} has no sha256 in index",
+                            drv.derivation_id, drv.child_object_id
+                        ),
+                    );
+                }
+            }
+        }
+    }
+
+    if hash_checks_fail == 0 && hash_checks_ok > 0 {
+        report.ok(format!("Derivation hash checks: {hash_checks_ok} passed"));
+    } else if hash_checks_ok == 0 && derivations.is_empty() {
+        report.ok("Derivation hash checks: no derivations to check");
+    }
+
+    // ── Derived object store integrity ────────────────────────────────────
+    let derived_objects: Vec<_> = objects
+        .iter()
+        .filter(|o| o.source_layer == "derived" || o.storage_ref.is_some())
+        .collect();
+
+    let mut store_ok = 0usize;
+    let mut store_fail = 0usize;
+
+    for obj in &derived_objects {
+        if let Some(sha256) = &obj.sha256 {
+            if sha256.starts_with("sha256:") {
+                let rel = derived_object_path(sha256);
+                match container.exists(&rel) {
+                    Ok(true) => {
+                        // Verify stored hash by reading
+                        match container.read_bytes(&rel) {
+                            Ok(data) => {
+                                let expected_hex =
+                                    sha256.strip_prefix("sha256:").unwrap_or(sha256.as_str());
+                                let actual_hex = format!("{:x}", Sha256::digest(&data));
+                                if actual_hex == expected_hex {
+                                    store_ok += 1;
+                                } else {
+                                    store_fail += 1;
+                                    report.fail(
+                                        "Derived object hash",
+                                        format!(
+                                            "object {} stored at {rel}: expected {} got {}",
+                                            obj.object_id,
+                                            &expected_hex[..16],
+                                            &actual_hex[..16]
+                                        ),
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                store_fail += 1;
+                                report.fail(
+                                    "Derived object read",
+                                    format!("object {} at {rel}: {e}", obj.object_id),
+                                );
+                            }
+                        }
+                    }
+                    Ok(false) => {
+                        store_fail += 1;
+                        report.fail(
+                            "Derived object missing",
+                            format!(
+                                "object {} references {} but file not found",
+                                obj.object_id, rel
+                            ),
+                        );
+                    }
+                    Err(e) => {
+                        store_fail += 1;
+                        report.fail(
+                            "Derived object exists check",
+                            format!("object {}: {e}", obj.object_id),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    if store_fail == 0 {
+        report.ok(format!(
+            "Derived object store integrity: {store_ok} verified"
+        ));
+    }
+
+    let valid = report.is_valid();
+    if let Some(path) = report_path {
+        write_json_report(path, &report, valid)?;
+    }
+    report.print();
+    Ok(valid)
 }
 
 fn includes_extensions(profile: VerifyProfile) -> bool {

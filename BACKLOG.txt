@@ -162,7 +162,10 @@ P0 - Direct oppakken
     - denied writes are audited append-only
     - object-producing worker mock passes integration tests
 
-- [ ] Lineage Sprint 12: deterministic object-index rebuild + lineage verify CLI (P0)
+- [x] Lineage Sprint 12: deterministic object-index rebuild + lineage verify CLI (P0) ✅ 2026-05-26
+  - Added: 2026-05-24
+  - Status: done
+  - Progress: completed 2026-05-26
   - Add `offf-index objects <case>` rebuild from job deltas:
     - read all job deltas
     - validate schema

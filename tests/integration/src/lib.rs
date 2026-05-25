@@ -20,12 +20,13 @@ use tempfile::TempDir;
 use offf_core::{
     chunk::{hex_sha256, read_chunk, verify_chunk, write_chunk},
     hash::{deserialize_merkle_root, merkle_root, serialize_merkle_tree},
+    lineage::ObjectLineageValidator,
     parquet_io::{read_leaves, read_physical_to_chunk, write_leaves, write_physical_to_chunk},
     provenance::ProvenanceWriter,
     types::{
         AcquisitionJson, AcquisitionParameters, AcquisitionSource, ChunkMetadata, ChunkingInfo,
-        Compression, ManifestHashes, ManifestIndexes, ManifestJson, SourceInfo, ToolInfo,
-        OFFF_VERSION, TOOL_VERSION,
+        Compression, DerivationRow, DiscoveredObjectRow, ManifestHashes, ManifestIndexes,
+        ManifestJson, ObjectEdgeRow, SourceInfo, ToolInfo, OFFF_VERSION, TOOL_VERSION,
     },
 };
 
@@ -698,5 +699,135 @@ fn chunk_refs_cover_full_partition_range() {
         refs.len(),
         2,
         "1 MiB partition should span 2 × 512 KiB chunks"
+    );
+}
+
+// ── Object lineage tests ──────────────────────────────────────────────────────
+
+/// Helper: build a minimal `DiscoveredObjectRow` with defaults for all optional fields.
+fn make_object(id: &str) -> DiscoveredObjectRow {
+    DiscoveredObjectRow {
+        object_id: id.to_string(),
+        object_type: "file".to_string(),
+        name: Some(id.to_string()),
+        logical_path: None,
+        media_type: None,
+        size_bytes: None,
+        sha256: None,
+        source_layer: "carved".to_string(),
+        storage_ref: None,
+        root_source_ref: None,
+        created_by_job_id: Some("job-1".to_string()),
+        parser_status: "ok".to_string(),
+        provenance_ref: None,
+        schema_version: "0.1.0".to_string(),
+    }
+}
+
+/// Helper: build a minimal `ObjectEdgeRow`.
+fn make_edge(edge_id: &str, parent: &str, child: &str) -> ObjectEdgeRow {
+    ObjectEdgeRow {
+        edge_id: edge_id.to_string(),
+        parent_object_id: parent.to_string(),
+        child_object_id: child.to_string(),
+        relation_type: "contains".to_string(),
+        method: Some("carved".to_string()),
+        logical_path: None,
+        sequence: None,
+        created_by_job_id: Some("job-1".to_string()),
+        provenance_ref: None,
+        schema_version: "0.1.0".to_string(),
+    }
+}
+
+/// Helper: build a minimal `DerivationRow`.
+fn make_derivation(deriv_id: &str, parent: &str, child: &str) -> DerivationRow {
+    DerivationRow {
+        derivation_id: deriv_id.to_string(),
+        parent_object_id: parent.to_string(),
+        child_object_id: child.to_string(),
+        job_id: "job-1".to_string(),
+        method: "extract".to_string(),
+        tool_id: "tool-a".to_string(),
+        tool_name: "tool-a".to_string(),
+        tool_version: "1.0".to_string(),
+        parameters_hash: None,
+        input_sha256: None,
+        output_sha256: None,
+        storage_mode: "indexed".to_string(),
+        provenance_ref: None,
+        created_at: "2026-01-01T00:00:00Z".to_string(),
+        schema_version: "0.1.0".to_string(),
+    }
+}
+
+#[test]
+fn lineage_valid_graph_passes() {
+    // parent → child (via edge and derivation)
+    let objects = vec![make_object("obj-parent"), make_object("obj-child")];
+    let edges = vec![make_edge("edge-1", "obj-parent", "obj-child")];
+    let derivations = vec![make_derivation("deriv-1", "obj-parent", "obj-child")];
+
+    let report = ObjectLineageValidator::validate(&objects, &edges, &derivations);
+
+    assert!(
+        report.is_valid(),
+        "valid graph should pass: {:?}",
+        (
+            &report.missing_edge_parents,
+            &report.missing_edge_children,
+            &report.missing_derivation_parents,
+            &report.missing_derivation_children,
+            &report.invalid_derivation_links,
+            &report.cycles,
+        )
+    );
+    assert!(report.missing_edge_parents.is_empty());
+    assert!(report.missing_edge_children.is_empty());
+    assert!(report.cycles.is_empty());
+}
+
+#[test]
+fn lineage_missing_child_object_fails() {
+    // Edge references a child that has no object row
+    let objects = vec![make_object("obj-parent")];
+    let edges = vec![make_edge("edge-1", "obj-parent", "obj-child-missing")];
+    let derivations = vec![];
+
+    let report = ObjectLineageValidator::validate(&objects, &edges, &derivations);
+
+    assert!(
+        !report.is_valid(),
+        "graph with missing child object should fail"
+    );
+    assert!(
+        !report.missing_edge_children.is_empty(),
+        "should report missing edge children: {:?}",
+        report.missing_edge_children
+    );
+}
+
+#[test]
+fn lineage_cycle_in_object_graph_fails() {
+    // A → B → C → A is a cycle
+    let objects = vec![
+        make_object("obj-a"),
+        make_object("obj-b"),
+        make_object("obj-c"),
+    ];
+    let edges = vec![
+        make_edge("edge-ab", "obj-a", "obj-b"),
+        make_edge("edge-bc", "obj-b", "obj-c"),
+        make_edge("edge-ca", "obj-c", "obj-a"),
+    ];
+    let derivations = vec![];
+
+    let report = ObjectLineageValidator::validate(&objects, &edges, &derivations);
+
+    assert!(!report.is_valid(), "graph with cycle should fail");
+    assert!(
+        !report.cycles.is_empty(),
+        "should report cycles: {:?}",
+        report.cycles
     );
 }

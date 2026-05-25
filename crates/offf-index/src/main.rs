@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
 };
@@ -8,12 +9,14 @@ use clap::{Parser, Subcommand};
 
 use offf_core::{
     ntfs::index_ntfs,
-    parquet_io::{read_physical_to_chunk, write_file_index},
+    parquet_io::{
+        read_object_edges, read_object_index, read_physical_to_chunk, write_derivations,
+        write_file_index, write_object_edges, write_object_index,
+    },
     partition::{detect_and_parse, detect_volume_type},
     provenance::ProvenanceWriter,
-    types::ManifestJson,
+    types::{DerivationRow, DiscoveredObjectRow, ManifestJson, ObjectEdgeRow},
 };
-
 const TOOL_NAME: &str = "offf-index";
 const TOOL_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -46,6 +49,14 @@ enum Command {
         #[arg(long)]
         partition: Option<String>,
     },
+    /// Deterministically rebuild the object graph indexes from job deltas
+    Objects {
+        /// Path to the OFFF container directory
+        container: PathBuf,
+        /// When set, skip writing if indexes already exist (idempotent run)
+        #[arg(long)]
+        skip_existing: bool,
+    },
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -58,6 +69,10 @@ fn main() -> Result<()> {
             container,
             partition,
         } => cmd_filesystem(&container, partition),
+        Command::Objects {
+            container,
+            skip_existing,
+        } => cmd_objects(&container, skip_existing),
     }
 }
 
@@ -311,4 +326,193 @@ fn resolve_partition(
         part.length,
         fs_type,
     ))
+}
+
+// ── offf-index objects ────────────────────────────────────────────────────────
+
+/// Deterministically rebuild `indexes/objects/` from all job deltas found in
+/// `analysis/jobs/*/objects_delta.jsonl`, `object_edges_delta.jsonl`, and
+/// `derivations_delta.jsonl`.
+///
+/// Merge strategy: first-writer-wins per object_id / edge_id / derivation_id.
+/// Job directories are sorted lexicographically to ensure reproducibility.
+fn cmd_objects(base: &Path, skip_existing: bool) -> Result<()> {
+    let manifest_raw = fs::read_to_string(base.join("manifest.json"))
+        .context("manifest.json not found – is this an OFFF container?")?;
+    let _manifest: ManifestJson =
+        serde_json::from_str(&manifest_raw).context("invalid manifest.json")?;
+
+    let out_dir = base.join("indexes/objects");
+    let idx_path = out_dir.join("object_index.parquet");
+    let edges_path = out_dir.join("object_edges.parquet");
+    let deriv_path = out_dir.join("derivations.parquet");
+
+    if skip_existing && idx_path.exists() && edges_path.exists() && deriv_path.exists() {
+        println!("Indexes already present and --skip-existing set; nothing to do.");
+        return Ok(());
+    }
+
+    let jobs_dir = base.join("analysis/jobs");
+
+    // Collect sorted job directories
+    let job_dirs: Vec<PathBuf> = if jobs_dir.exists() {
+        let mut dirs = Vec::new();
+        for entry in fs::read_dir(&jobs_dir).context("failed to read analysis/jobs/")? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                dirs.push(entry.path());
+            }
+        }
+        dirs.sort();
+        dirs
+    } else {
+        Vec::new()
+    };
+
+    // ── Merge: objects (first-writer-wins by object_id) ───────────────────
+    let mut object_map: HashMap<String, DiscoveredObjectRow> = HashMap::new();
+    let mut edge_map: HashMap<String, ObjectEdgeRow> = HashMap::new();
+    let mut deriv_map: HashMap<String, DerivationRow> = HashMap::new();
+
+    let mut delta_files_read = 0usize;
+
+    for job_dir in &job_dirs {
+        let job_id = job_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown");
+
+        // objects_delta.jsonl
+        let obj_delta = job_dir.join("objects_delta.jsonl");
+        if obj_delta.exists() {
+            let content = fs::read_to_string(&obj_delta)
+                .with_context(|| format!("read failed: {}", obj_delta.display()))?;
+            for (line_no, line) in content.lines().enumerate() {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                let row: DiscoveredObjectRow = serde_json::from_str(line).with_context(|| {
+                    format!(
+                        "invalid object row at {}:{}: {line}",
+                        obj_delta.display(),
+                        line_no + 1
+                    )
+                })?;
+                object_map.entry(row.object_id.clone()).or_insert(row);
+            }
+            delta_files_read += 1;
+        }
+
+        // object_edges_delta.jsonl
+        let edges_delta = job_dir.join("object_edges_delta.jsonl");
+        if edges_delta.exists() {
+            let content = fs::read_to_string(&edges_delta)
+                .with_context(|| format!("read failed: {}", edges_delta.display()))?;
+            for (line_no, line) in content.lines().enumerate() {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                let row: ObjectEdgeRow = serde_json::from_str(line).with_context(|| {
+                    format!(
+                        "invalid edge row at {}:{}: {line}",
+                        edges_delta.display(),
+                        line_no + 1
+                    )
+                })?;
+                edge_map.entry(row.edge_id.clone()).or_insert(row);
+            }
+            delta_files_read += 1;
+        }
+
+        // derivations_delta.jsonl
+        let deriv_delta = job_dir.join("derivations_delta.jsonl");
+        if deriv_delta.exists() {
+            let content = fs::read_to_string(&deriv_delta)
+                .with_context(|| format!("read failed: {}", deriv_delta.display()))?;
+            for (line_no, line) in content.lines().enumerate() {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                let row: DerivationRow = serde_json::from_str(line).with_context(|| {
+                    format!(
+                        "invalid derivation row at {}:{}: {line}",
+                        deriv_delta.display(),
+                        line_no + 1
+                    )
+                })?;
+                deriv_map.entry(row.derivation_id.clone()).or_insert(row);
+            }
+            delta_files_read += 1;
+        }
+
+        let _ = job_id; // suppress unused-variable warning when no deltas present
+    }
+
+    // ── Merge with existing indexes (idempotent incremental rebuild) ──────
+    if idx_path.exists() {
+        let existing =
+            read_object_index(&idx_path).context("failed to read existing object_index.parquet")?;
+        for row in existing {
+            object_map.entry(row.object_id.clone()).or_insert(row);
+        }
+    }
+    if edges_path.exists() {
+        let existing = read_object_edges(&edges_path)
+            .context("failed to read existing object_edges.parquet")?;
+        for row in existing {
+            edge_map.entry(row.edge_id.clone()).or_insert(row);
+        }
+    }
+
+    // ── Sort deterministically and write ──────────────────────────────────
+    let mut objects: Vec<DiscoveredObjectRow> = object_map.into_values().collect();
+    objects.sort_by(|a, b| a.object_id.cmp(&b.object_id));
+
+    let mut edges: Vec<ObjectEdgeRow> = edge_map.into_values().collect();
+    edges.sort_by(|a, b| a.edge_id.cmp(&b.edge_id));
+
+    let mut derivations: Vec<DerivationRow> = deriv_map.into_values().collect();
+    derivations.sort_by(|a, b| a.derivation_id.cmp(&b.derivation_id));
+
+    fs::create_dir_all(&out_dir)
+        .with_context(|| format!("failed to create {}", out_dir.display()))?;
+
+    write_object_index(&idx_path, &objects).context("failed to write object_index.parquet")?;
+    write_object_edges(&edges_path, &edges).context("failed to write object_edges.parquet")?;
+    write_derivations(&deriv_path, &derivations).context("failed to write derivations.parquet")?;
+
+    println!("Container: {}", base.display());
+    println!("Job directories scanned: {}", job_dirs.len());
+    println!("Delta files read:        {delta_files_read}");
+    println!("Objects indexed:         {}", objects.len());
+    println!("Edges indexed:           {}", edges.len());
+    println!("Derivations indexed:     {}", derivations.len());
+    println!();
+    println!("Written:");
+    println!("  {}", idx_path.display());
+    println!("  {}", edges_path.display());
+    println!("  {}", deriv_path.display());
+
+    let prov_path = base.join("provenance/chain_of_custody.jsonl");
+    let mut prov = ProvenanceWriter::new(&prov_path).context("provenance writer failed")?;
+    prov.record(
+        "rebuilt_object_index",
+        TOOL_NAME,
+        TOOL_VERSION,
+        "system",
+        serde_json::json!({
+            "container": base.display().to_string(),
+            "job_dirs_scanned": job_dirs.len(),
+            "delta_files_read": delta_files_read,
+            "objects_indexed": objects.len(),
+            "edges_indexed": edges.len(),
+            "derivations_indexed": derivations.len(),
+        }),
+    )
+    .context("provenance write failed")?;
+
+    Ok(())
 }
