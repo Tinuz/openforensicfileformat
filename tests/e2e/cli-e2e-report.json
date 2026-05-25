@@ -1,0 +1,26 @@
+{
+  "generated_at": "2026-05-24T20:00:22.885985+00:00",
+  "status": "PASS",
+  "checks": [
+    {
+      "name": "keyword_hits_job_scoped_present",
+      "status": "PASS",
+      "detail": "C:\\Users\\marti\\AppData\\Local\\Temp\\offf-e2e-5x8qztcv\\e2e.offf\\analysis\\jobs\\job-e2e-keyword\\keyword_hits.parquet"
+    },
+    {
+      "name": "keyword_result_manifest_present",
+      "status": "PASS",
+      "detail": "C:\\Users\\marti\\AppData\\Local\\Temp\\offf-e2e-5x8qztcv\\e2e.offf\\analysis\\jobs\\job-e2e-keyword\\result_manifest.json"
+    },
+    {
+      "name": "yara_hits_job_scoped_present",
+      "status": "PASS",
+      "detail": "C:\\Users\\marti\\AppData\\Local\\Temp\\offf-e2e-5x8qztcv\\e2e.offf\\analysis\\jobs\\job-e2e-yara\\yara_hits.parquet"
+    },
+    {
+      "name": "yara_result_manifest_present",
+      "status": "PASS",
+      "detail": "C:\\Users\\marti\\AppData\\Local\\Temp\\offf-e2e-5x8qztcv\\e2e.offf\\analysis\\jobs\\job-e2e-yara\\result_manifest.json"
+    }
+  ]
+}

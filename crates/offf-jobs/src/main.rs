@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 
 use offf_core::{
     parquet_io::read_physical_to_chunk,
-    types::{JobManifest, JobScope, ManifestJson, ToolInfo},
+    types::{JobManifest, JobOutputContract, JobScope, ManifestJson, ToolInfo},
 };
 
 const TOOL_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -61,6 +61,39 @@ enum Command {
         /// Chunks to scan: "all" or comma-separated "sha256:…" IDs
         #[arg(long, default_value = "all")]
         chunks: String,
+        /// Output path for the job manifest JSON
+        #[arg(long, short)]
+        output: PathBuf,
+    },
+    /// Create an object-producing worker job manifest
+    CreateObjectWorker {
+        /// Path to the OFFF container
+        #[arg(long)]
+        case: PathBuf,
+        /// Task name for this job
+        #[arg(long)]
+        task: String,
+        /// Tool name to record in the manifest
+        #[arg(long)]
+        tool_name: String,
+        /// Tool version
+        #[arg(long, default_value = "0.1.0")]
+        tool_version: String,
+        /// Chunks to scan: "all" or comma-separated "sha256:\u2026" IDs
+        #[arg(long, default_value = "all")]
+        chunks: String,
+        /// Allow this job to discover objects
+        #[arg(long, default_value_t = false)]
+        may_produce_objects: bool,
+        /// Allow this job to produce object edges
+        #[arg(long, default_value_t = false)]
+        may_produce_edges: bool,
+        /// Allow this job to produce derivations
+        #[arg(long, default_value_t = false)]
+        may_produce_derivations: bool,
+        /// Allow this job to materialize objects
+        #[arg(long, default_value_t = false)]
+        may_materialize_objects: bool,
         /// Output path for the job manifest JSON
         #[arg(long, short)]
         output: PathBuf,
@@ -116,6 +149,29 @@ fn main() -> Result<()> {
             max_retries,
             force,
         } => cmd_run(&case, &job, &worker_id, max_retries, force),
+        Command::CreateObjectWorker {
+            case,
+            task,
+            tool_name,
+            tool_version,
+            chunks,
+            may_produce_objects,
+            may_produce_edges,
+            may_produce_derivations,
+            may_materialize_objects,
+            output,
+        } => cmd_create_object_worker(
+            &case,
+            &task,
+            &tool_name,
+            &tool_version,
+            &chunks,
+            may_produce_objects,
+            may_produce_edges,
+            may_produce_derivations,
+            may_materialize_objects,
+            &output,
+        ),
     }
 }
 
@@ -162,6 +218,56 @@ struct WorkerHealthEvent {
     job_id: String,
     attempt: u32,
     detail: String,
+}
+
+// ── offf-jobs create-object-worker ────────────────────────────────────────────
+
+#[allow(clippy::too_many_arguments)]
+fn cmd_create_object_worker(
+    case: &Path,
+    task: &str,
+    tool_name: &str,
+    tool_version: &str,
+    chunks_arg: &str,
+    may_produce_objects: bool,
+    may_produce_edges: bool,
+    may_produce_derivations: bool,
+    may_materialize_objects: bool,
+    output: &Path,
+) -> Result<()> {
+    let (case_id, chunk_ids) = resolve_case(case, chunks_arg)?;
+
+    let job_id = format!("job-{}", uuid::Uuid::new_v4());
+    let manifest = JobManifest {
+        job_id: job_id.clone(),
+        created_at: Utc::now(),
+        case_id,
+        task: task.to_string(),
+        scope: JobScope {
+            chunks: chunk_ids,
+        },
+        tool: ToolInfo {
+            name: tool_name.to_string(),
+            version: tool_version.to_string(),
+        },
+        input_scope: None,
+        output_contract: Some(JobOutputContract {
+            may_produce_results: true,
+            may_produce_objects,
+            may_produce_edges,
+            may_produce_derivations,
+            may_materialize_objects,
+        }),
+        parameters: serde_json::Value::Object(serde_json::Map::new()),
+    };
+
+    let json = serde_json::to_vec_pretty(&manifest).context("serialize manifest")?;
+    fs::write(output, &json).with_context(|| format!("write {}", output.display()))?;
+    println!("Job manifest written to {}", output.display());
+    println!("  job_id  : {job_id}");
+    println!("  task    : {task}");
+    println!("  tool    : {tool_name} {tool_version}");
+    Ok(())
 }
 
 // ── offf-jobs create-keyword ──────────────────────────────────────────────────

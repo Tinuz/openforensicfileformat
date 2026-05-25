@@ -19,15 +19,18 @@ const TOOL_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Bytes of context to capture before and after each hit.
 const CONTEXT_BYTES: usize = 32;
 const KEYWORD_HIT_SCHEMA: &str = "offf-keyword-hit-row-0.1.0";
+const ERROR_SCHEMA: &str = "offf-analysis-error-0.2.0";
 
 #[derive(Debug, Serialize)]
 struct ResultManifest {
     job_id: String,
     task: String,
+    status: String,
     created_at: String,
     tool: ToolInfo,
     input: ResultManifestInput,
-    outputs: Vec<ResultManifestOutput>,
+    outputs: ResultManifestOutputs,
+    statistics: ResultManifestStats,
 }
 
 #[derive(Debug, Serialize)]
@@ -41,10 +44,34 @@ struct ResultManifestInput {
 }
 
 #[derive(Debug, Serialize)]
-struct ResultManifestOutput {
+struct ResultManifestOutputs {
+    analysis_results: Vec<ResultManifestArtifact>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    errors: Option<ResultManifestArtifact>,
+}
+
+#[derive(Debug, Serialize)]
+struct ResultManifestArtifact {
     path: String,
     sha256: String,
     schema: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ResultManifestStats {
+    chunks_in_scope: usize,
+    chunks_scanned: usize,
+    results_written: usize,
+    errors: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ScanErrorEntry {
+    error_id: String,
+    chunk_id: String,
+    timestamp: String,
+    message: String,
+    schema_version: String,
 }
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
@@ -150,50 +177,59 @@ fn main() -> Result<()> {
 
     // ── Parallel chunk scan ───────────────────────────────────────────────
     let hits: Mutex<Vec<KeywordHitRow>> = Mutex::new(Vec::new());
+    let scan_errors: Mutex<Vec<ScanErrorEntry>> = Mutex::new(Vec::new());
 
-    scoped_chunks
-        .par_iter()
-        .try_for_each(|chunk| -> Result<()> {
-            let plaintext = read_chunk_verified(&container, chunk)
-                .with_context(|| format!("failed to read chunk {}", chunk.chunk_id))?;
-
-            let mut local_hits: Vec<KeywordHitRow> = Vec::new();
-
-            for (keyword, encoding, pattern) in &patterns {
-                if pattern.is_empty() {
-                    continue;
-                }
-                for offset in find_all(&plaintext, pattern) {
-                    let physical_offset = chunk.source_offset + offset as u64;
-                    let before_start = offset.saturating_sub(CONTEXT_BYTES);
-                    let after_end = (offset + pattern.len() + CONTEXT_BYTES).min(plaintext.len());
-                    let context_before = hex::encode(&plaintext[before_start..offset]);
-                    let context_after =
-                        hex::encode(&plaintext[(offset + pattern.len())..after_end]);
-
-                    local_hits.push(KeywordHitRow {
-                        hit_id: String::new(), // filled in after collection
-                        job_id: job.job_id.clone(),
-                        keyword: keyword.clone(),
-                        chunk_id: chunk.chunk_id.clone(),
-                        physical_offset,
-                        file_id: String::new(),
-                        context_before,
-                        context_after,
-                        encoding: encoding.clone(),
-                        worker_id: cli.worker_id.clone(),
-                        timestamp: Utc::now().to_rfc3339(),
-                    });
-                }
+    scoped_chunks.par_iter().for_each(|chunk| {
+        let plaintext = match read_chunk_verified(&container, chunk) {
+            Ok(p) => p,
+            Err(e) => {
+                scan_errors.lock().unwrap().push(ScanErrorEntry {
+                    error_id: format!("err-{}", chunk.chunk_id),
+                    chunk_id: chunk.chunk_id.clone(),
+                    timestamp: Utc::now().to_rfc3339(),
+                    message: e.to_string(),
+                    schema_version: "0.2.0".to_string(),
+                });
+                return;
             }
+        };
 
-            if !local_hits.is_empty() {
-                hits.lock().unwrap().extend(local_hits);
+        let mut local_hits: Vec<KeywordHitRow> = Vec::new();
+
+        for (keyword, encoding, pattern) in &patterns {
+            if pattern.is_empty() {
+                continue;
             }
-            Ok(())
-        })?;
+            for offset in find_all(&plaintext, pattern) {
+                let physical_offset = chunk.source_offset + offset as u64;
+                let before_start = offset.saturating_sub(CONTEXT_BYTES);
+                let after_end = (offset + pattern.len() + CONTEXT_BYTES).min(plaintext.len());
+                let context_before = hex::encode(&plaintext[before_start..offset]);
+                let context_after = hex::encode(&plaintext[(offset + pattern.len())..after_end]);
+
+                local_hits.push(KeywordHitRow {
+                    hit_id: String::new(), // filled in after collection
+                    job_id: job.job_id.clone(),
+                    keyword: keyword.clone(),
+                    chunk_id: chunk.chunk_id.clone(),
+                    physical_offset,
+                    file_id: String::new(),
+                    context_before,
+                    context_after,
+                    encoding: encoding.clone(),
+                    worker_id: cli.worker_id.clone(),
+                    timestamp: Utc::now().to_rfc3339(),
+                });
+            }
+        }
+
+        if !local_hits.is_empty() {
+            hits.lock().unwrap().extend(local_hits);
+        }
+    });
 
     let mut all_hits = hits.into_inner().unwrap();
+    let all_errors = scan_errors.into_inner().unwrap();
     // Sort by physical offset for deterministic output
     all_hits.sort_by_key(|h| (h.physical_offset, h.encoding.clone(), h.keyword.clone()));
     // Assign hit IDs
@@ -235,9 +271,41 @@ fn main() -> Result<()> {
     println!("Written:    {rel_output}");
 
     let output_sha256 = format!("sha256:{}", hex_sha256(&output_bytes));
+
+    // ── Write errors.jsonl (if any) ───────────────────────────────────────
+    let errors_artifact = if !all_errors.is_empty() {
+        let rel_errors = format!("{job_dir}/errors.jsonl");
+        let mut lines = String::new();
+        for (i, entry) in all_errors.iter().enumerate() {
+            let mut e = entry.clone();
+            e.error_id = format!("err-{i:06}");
+            lines.push_str(&serde_json::to_string(&e)?);
+            lines.push('\n');
+        }
+        let errors_bytes = lines.into_bytes();
+        let errors_sha256 = format!("sha256:{}", hex_sha256(&errors_bytes));
+        container
+            .write_bytes(&rel_errors, &errors_bytes)
+            .context("failed to write errors.jsonl")?;
+        println!("Written:    {rel_errors}");
+        Some(ResultManifestArtifact {
+            path: rel_errors,
+            sha256: errors_sha256,
+            schema: ERROR_SCHEMA.to_string(),
+        })
+    } else {
+        None
+    };
+
+    let status = if all_errors.is_empty() {
+        "completed"
+    } else {
+        "partial"
+    };
     let result_manifest = ResultManifest {
         job_id: job.job_id.clone(),
         task: job.task.clone(),
+        status: status.to_string(),
         created_at: Utc::now().to_rfc3339(),
         tool: ToolInfo {
             name: TOOL_NAME.to_string(),
@@ -250,11 +318,20 @@ fn main() -> Result<()> {
             scope_ref: None,
             chunk_count: scoped_chunks.len(),
         },
-        outputs: vec![ResultManifestOutput {
-            path: rel_output.clone(),
-            sha256: output_sha256,
-            schema: KEYWORD_HIT_SCHEMA.to_string(),
-        }],
+        outputs: ResultManifestOutputs {
+            analysis_results: vec![ResultManifestArtifact {
+                path: rel_output.clone(),
+                sha256: output_sha256,
+                schema: KEYWORD_HIT_SCHEMA.to_string(),
+            }],
+            errors: errors_artifact,
+        },
+        statistics: ResultManifestStats {
+            chunks_in_scope: scoped_chunks.len(),
+            chunks_scanned: scoped_chunks.len() - all_errors.len(),
+            results_written: all_hits.len(),
+            errors: all_errors.len(),
+        },
     };
     let result_manifest_json = serde_json::to_vec_pretty(&result_manifest)
         .context("failed to serialize result_manifest.json")?;

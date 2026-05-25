@@ -399,6 +399,59 @@ pub fn chunk_relative_path(plaintext_sha256: &str) -> String {
     format!("chunks/sha256/{}/{}/{}.chunk", &hex[..2], &hex[2..4], hex)
 }
 
+/// Relative path within the container for a materialized derived object.
+/// Layout: `derived/objects/sha256/<hex[0..2]>/<hex[2..4]>/<hex>.bin`
+pub fn derived_object_path(sha256: &str) -> String {
+    let hex = sha256.strip_prefix("sha256:").unwrap_or(sha256);
+    format!(
+        "derived/objects/sha256/{}/{}/{}.bin",
+        &hex[..2],
+        &hex[2..4],
+        hex
+    )
+}
+
+/// Write bytes to the content-addressed derived object store.
+/// Returns the `sha256:<hex>` digest of the written bytes.
+/// If the file already exists, the existing bytes are verified before
+/// returning `Ok`.  A hash mismatch is a hard error.
+pub fn write_derived_object(container: &ContainerRef, bytes: &[u8]) -> Result<String, OfffError> {
+    let hex = hex_sha256(bytes);
+    let sha256 = format!("sha256:{hex}");
+    let rel = derived_object_path(&sha256);
+    if container.exists(&rel)? {
+        let existing = container.read_bytes(&rel)?;
+        let existing_hex = hex_sha256(&existing);
+        if existing_hex != hex {
+            return Err(OfffError::HashMismatch {
+                chunk_id: rel,
+                expected: hex,
+                actual: existing_hex,
+            });
+        }
+    } else {
+        container.write_bytes(&rel, bytes)?;
+    }
+    Ok(sha256)
+}
+
+/// Read a materialized derived object and verify its hash.
+/// Returns the raw object bytes.
+pub fn read_derived_object(container: &ContainerRef, sha256: &str) -> Result<Vec<u8>, OfffError> {
+    let rel = derived_object_path(sha256);
+    let bytes = container.read_bytes(&rel)?;
+    let expected = sha256.strip_prefix("sha256:").unwrap_or(sha256);
+    let actual = hex_sha256(&bytes);
+    if actual != expected {
+        return Err(OfffError::HashMismatch {
+            chunk_id: rel,
+            expected: expected.to_string(),
+            actual,
+        });
+    }
+    Ok(bytes)
+}
+
 fn join_key(prefix: &str, rel: &str) -> String {
     if prefix.is_empty() {
         rel.trim_start_matches('/').to_string()
