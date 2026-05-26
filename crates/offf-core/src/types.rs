@@ -1,7 +1,9 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 pub const OFFF_VERSION: &str = "0.1.0";
+pub const OFFF_V2_VERSION: &str = "0.2.0";
 
 // ── Partition table ───────────────────────────────────────────────────────────
 
@@ -306,6 +308,17 @@ pub struct AnnotationEvent {
 
 // ── Manifest ──────────────────────────────────────────────────────────────────
 
+/// Free-form extension entries, keyed by `namespace:name` strings.
+///
+/// Tools may attach arbitrary JSON objects under their own namespace.
+/// Keys MUST follow the `namespace:name` pattern to be conformance-valid.
+/// Only present in OFFF v0.2.0+ containers.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ManifestExtensions {
+    #[serde(flatten)]
+    pub entries: HashMap<String, serde_json::Value>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManifestJson {
     pub offf_version: String,
@@ -316,6 +329,9 @@ pub struct ManifestJson {
     pub hashes: ManifestHashes,
     pub chunking: ChunkingInfo,
     pub indexes: ManifestIndexes,
+    /// Optional extension namespace entries (OFFF v0.2.0+).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<ManifestExtensions>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -95,7 +95,7 @@ P0 - Direct oppakken
   - Done: 2026-05-24
   - Progress: `.github/workflows/offf-ci.yml` bevat nu harde quality gates (`fmt`, strikte `clippy`, volledige workspace tests en release build), plus aparte jobs voor conformance en lokale CLI E2E met artifact upload van JSON-rapporten. `tests/e2e/run_cli_e2e.py` voegt een lokale convert->verify->keyword->yara keten toe met machine-readable output (`tests/e2e/cli-e2e-report.json`). Conformance negatieve scenario's zijn dataset-gedreven gemaakt via `tests/conformance/negative_cases.json` en worden machine-readable gerapporteerd
 
-- [ ] Lineage Sprint 9: object lineage core model + schemas (P0)
+- [x] Lineage Sprint 9: object lineage core model + schemas (P0) ✅ 2026-05-25
   - Add generic OFFF Core row models:
     - `DiscoveredObjectRow` / object index row
     - `ObjectEdgeRow`
@@ -114,14 +114,14 @@ P0 - Direct oppakken
     - `indexes/objects/derivations.parquet`
   - Add lineage validator primitives (`ObjectLineageValidator`) for referential integrity checks
   - Added: 2026-05-24
-  - Status: in-progress
+  - Status: done
   - Progress: `offf-core` bevat nu generieke object-lineage modellen (`DiscoveredObjectRow`, `ObjectEdgeRow`, `DerivationRow`, `ObjectSourceRef`, `ObjectStorageRef`), Parquet read/write helpers voor `indexes/objects/*`, en validator-primitieven via `ObjectLineageValidator` (referential checks + cycle detectie). `JobManifest` is v0.2-voorbereid met optionele `input_scope` en `output_contract` zonder v0.1-compat te breken. In `docs/schema` zijn de gevraagde 0.2.0 lineage/object-producing schema’s toegevoegd plus een 0.2 catalog.
   - Acceptance:
     - `object_index`, `object_edges`, `derivations` schema-validated and loadable
     - parent/child references validated; missing refs reported
     - cycle detection available (error or warning by profile)
 
-- [ ] Lineage Sprint 10: derived object store + worker output contract v0.2 (P0)
+- [x] Lineage Sprint 10: derived object store + worker output contract v0.2 (P0) ✅ 2026-05-25
   - Implement content-addressed derived object store:
     - `derived/objects/sha256/ab/cd/<sha256>.bin`
     - storage modes: `referenced_only` and `materialized`
@@ -233,9 +233,11 @@ Lineage Implementatievolgorde Per Crate (S9-S12)
 P1 - Daarna
 -----------
 
-- [ ] OFFF v0.2 manifest extensions foundation (P1)
+- [x] OFFF v0.2 manifest extensions foundation (P1) ✅ 2026-05-26 [Sprint 13]
   - Add optional `extensions` section to `ManifestJson`
   - Add v0.2 schema catalog entries and compatibility tests for v0.1 readers
+  - Added: 2026-05-26
+  - Status: done
 
 - [ ] Object graph read/query APIs (P1)
   - Add list/get/children/parents/lineage endpoints and SDK wrappers

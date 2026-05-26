@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "offf_version": "0.2.0",
   "schemas": {
-    "manifest": "offf-manifest-0.1.0.schema.json",
+    "manifest": "offf-manifest-0.2.0.schema.json",
     "acquisition": "offf-acquisition-0.1.0.schema.json",
     "provenance_event": "offf-provenance-event-0.1.0.schema.json",
     "partition_table": "offf-partition-table-0.1.0.schema.json",

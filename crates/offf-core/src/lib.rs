@@ -12,4 +12,6 @@ pub mod types;
 
 pub use error::OfffError;
 pub use lineage::{ObjectLineageValidationReport, ObjectLineageValidator};
-pub use types::{DerivationRow, DiscoveredObjectRow, ObjectEdgeRow};
+pub use types::{
+    DerivationRow, DiscoveredObjectRow, ManifestExtensions, ObjectEdgeRow, OFFF_V2_VERSION,
+};

@@ -368,6 +368,7 @@ fn convert(args: Args) -> Result<()> {
             indexes: ManifestIndexes {
                 physical_to_chunk: "maps/physical_to_chunk.parquet".to_string(),
             },
+            extensions: None,
         };
 
         let manifest_json =

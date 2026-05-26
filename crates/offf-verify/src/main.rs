@@ -18,7 +18,7 @@ use offf_core::{
         read_physical_to_chunk, read_physical_to_chunk_bytes,
     },
     storage::{derived_object_path, read_chunk_verified, ContainerRef},
-    types::{AcquisitionJson, ManifestJson, OFFF_VERSION},
+    types::{AcquisitionJson, ManifestJson, OFFF_V2_VERSION, OFFF_VERSION},
 };
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
@@ -248,12 +248,63 @@ fn verify(
     };
 
     // ── Check 2: OFFF version ──────────────────────────────────────────────
-    if manifest.offf_version == OFFF_VERSION {
+    let is_v2 = manifest.offf_version == OFFF_V2_VERSION;
+    if manifest.offf_version == OFFF_VERSION || is_v2 {
         report.ok(format!("OFFF version: {}", manifest.offf_version));
     } else {
         report.fail(
             "OFFF version",
-            format!("expected {OFFF_VERSION}, got {}", manifest.offf_version),
+            format!(
+                "expected {} or {OFFF_V2_VERSION}, got {}",
+                OFFF_VERSION, manifest.offf_version
+            ),
+        );
+    }
+
+    // ── Check 2a: extensions namespace format (v0.2.0+) ───────────────────
+    if let Some(ext) = &manifest.extensions {
+        if ext.entries.is_empty() {
+            if is_v2 {
+                report.ok("Extensions: present but empty");
+            }
+        } else if includes_schemas(profile) {
+            // In core+schemas profile: enforce namespace:name key pattern
+            let mut bad_keys: Vec<&String> = ext
+                .entries
+                .keys()
+                .filter(|k| {
+                    let mut parts = k.splitn(2, ':');
+                    let ns = parts.next().unwrap_or("");
+                    let name = parts.next().unwrap_or("");
+                    ns.is_empty() || name.is_empty()
+                })
+                .collect();
+            bad_keys.sort();
+            if bad_keys.is_empty() {
+                report.ok(format!(
+                    "Extensions: {} namespace(s) valid",
+                    ext.entries.len()
+                ));
+            } else {
+                for k in bad_keys {
+                    report.fail(
+                        "Extension key format",
+                        format!("key '{k}' must match 'namespace:name' pattern"),
+                    );
+                }
+            }
+        } else {
+            report.ok(format!(
+                "Extensions: {} namespace(s) present",
+                ext.entries.len()
+            ));
+        }
+    }
+
+    if !is_v2 && manifest.extensions.is_some() {
+        report.warn(
+            "Extensions section",
+            "extensions present in a v0.1.0 manifest; expected only in v0.2.0+",
         );
     }
 

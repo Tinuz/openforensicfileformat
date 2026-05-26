@@ -301,6 +301,7 @@ fn build_case_fixture(root: &Path) -> Result<Fixture, Box<dyn std::error::Error>
         indexes: ManifestIndexes {
             physical_to_chunk: "maps/physical_to_chunk.parquet".to_string(),
         },
+        extensions: None,
     };
 
     fs::write(

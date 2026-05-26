@@ -25,8 +25,9 @@ use offf_core::{
     provenance::ProvenanceWriter,
     types::{
         AcquisitionJson, AcquisitionParameters, AcquisitionSource, ChunkMetadata, ChunkingInfo,
-        Compression, DerivationRow, DiscoveredObjectRow, ManifestHashes, ManifestIndexes,
-        ManifestJson, ObjectEdgeRow, SourceInfo, ToolInfo, OFFF_VERSION, TOOL_VERSION,
+        Compression, DerivationRow, DiscoveredObjectRow, ManifestExtensions, ManifestHashes,
+        ManifestIndexes, ManifestJson, ObjectEdgeRow, SourceInfo, ToolInfo, OFFF_V2_VERSION,
+        OFFF_VERSION, TOOL_VERSION,
     },
 };
 
@@ -116,6 +117,7 @@ fn convert_image(
         indexes: ManifestIndexes {
             physical_to_chunk: "maps/physical_to_chunk.parquet".to_string(),
         },
+        extensions: None,
     };
     fs::write(
         container.join("manifest.json"),
@@ -830,4 +832,139 @@ fn lineage_cycle_in_object_graph_fails() {
         "should report cycles: {:?}",
         report.cycles
     );
+}
+
+// ── Manifest v0.2 extension tests ─────────────────────────────────────────────
+
+/// Helper: build a minimal `ManifestJson` for unit tests (no actual chunks written).
+fn make_manifest(offf_version: &str) -> ManifestJson {
+    use chrono::TimeZone;
+    ManifestJson {
+        offf_version: offf_version.to_string(),
+        container_id: "urn:offf:case:test-case-001".to_string(),
+        created_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
+        created_by_tool: ToolInfo {
+            name: "offf-convert".to_string(),
+            version: "0.1.0".to_string(),
+        },
+        source: SourceInfo {
+            source_type: "raw_image".to_string(),
+            size_bytes: 1024 * 1024,
+            sector_size: 512,
+        },
+        hashes: ManifestHashes {
+            source_sha256: "a".repeat(64),
+            merkle_root_sha256: "b".repeat(64),
+        },
+        chunking: ChunkingInfo {
+            chunk_size: 512 * 1024,
+            chunking_mode: "fixed".to_string(),
+            compression: "none".to_string(),
+            hash_algorithm: "sha256".to_string(),
+        },
+        indexes: ManifestIndexes {
+            physical_to_chunk: "maps/physical_to_chunk.parquet".to_string(),
+        },
+        extensions: None,
+    }
+}
+
+#[test]
+fn manifest_v010_round_trip_no_extensions() {
+    let m = make_manifest(OFFF_VERSION);
+    let json = serde_json::to_string(&m).unwrap();
+    let loaded: ManifestJson = serde_json::from_str(&json).unwrap();
+    assert_eq!(loaded.offf_version, OFFF_VERSION);
+    assert!(loaded.extensions.is_none());
+    // serialised JSON must not contain 'extensions' key
+    assert!(
+        !json.contains("\"extensions\""),
+        "v0.1.0 manifest must not serialise extensions field"
+    );
+}
+
+#[test]
+fn manifest_v020_round_trip_with_extensions() {
+    let mut m = make_manifest(OFFF_V2_VERSION);
+    let mut entries = std::collections::HashMap::new();
+    entries.insert(
+        "acme-forensics:chain-of-custody".to_string(),
+        serde_json::json!({ "officer": "J. Smith", "badge": "42" }),
+    );
+    entries.insert(
+        "lab-tools:acquisition-metadata".to_string(),
+        serde_json::json!({ "device_make": "Tableau", "firmware": "3.14" }),
+    );
+    m.extensions = Some(ManifestExtensions { entries });
+
+    let json = serde_json::to_string_pretty(&m).unwrap();
+    let loaded: ManifestJson = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(loaded.offf_version, OFFF_V2_VERSION);
+    let ext = loaded
+        .extensions
+        .as_ref()
+        .expect("extensions must be present");
+    assert_eq!(ext.entries.len(), 2);
+    assert!(ext.entries.contains_key("acme-forensics:chain-of-custody"));
+    assert!(ext.entries.contains_key("lab-tools:acquisition-metadata"));
+    let coc = &ext.entries["acme-forensics:chain-of-custody"];
+    assert_eq!(coc["officer"], "J. Smith");
+}
+
+#[test]
+fn manifest_v010_json_loadable_by_v020_reader() {
+    // A v0.1.0 manifest JSON (no extensions field) must parse into ManifestJson
+    // with extensions == None even though the struct now has that field.
+    let raw = r#"{
+        "offf_version": "0.1.0",
+        "container_id": "urn:offf:case:compat-test",
+        "created_at": "2026-01-01T00:00:00Z",
+        "created_by_tool": { "name": "offf-convert", "version": "0.1.0" },
+        "source": { "type": "raw_image", "size_bytes": 1048576, "sector_size": 512 },
+        "hashes": {
+            "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "merkle_root_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "chunking": {
+            "chunk_size": 524288,
+            "chunking_mode": "fixed",
+            "compression": "none",
+            "hash_algorithm": "sha256"
+        },
+        "indexes": { "physical_to_chunk": "maps/physical_to_chunk.parquet" }
+    }"#;
+    let m: ManifestJson = serde_json::from_str(raw).expect("v0.1.0 manifest must parse");
+    assert_eq!(m.offf_version, "0.1.0");
+    assert!(m.extensions.is_none(), "extensions must be None for v0.1.0");
+}
+
+#[test]
+fn manifest_v020_json_loadable_by_strict_fields() {
+    // A v0.2.0 manifest with extensions must round-trip correctly.
+    let raw = r#"{
+        "offf_version": "0.2.0",
+        "container_id": "urn:offf:case:v2-test",
+        "created_at": "2026-01-01T00:00:00Z",
+        "created_by_tool": { "name": "offf-convert", "version": "0.2.0" },
+        "source": { "type": "raw_image", "size_bytes": 2097152, "sector_size": 512 },
+        "hashes": {
+            "source_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "merkle_root_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        },
+        "chunking": {
+            "chunk_size": 524288,
+            "chunking_mode": "fixed",
+            "compression": "zstd",
+            "hash_algorithm": "sha256"
+        },
+        "indexes": { "physical_to_chunk": "maps/physical_to_chunk.parquet" },
+        "extensions": {
+            "example-ns:meta": { "key": "value" }
+        }
+    }"#;
+    let m: ManifestJson = serde_json::from_str(raw).expect("v0.2.0 manifest must parse");
+    assert_eq!(m.offf_version, "0.2.0");
+    let ext = m.extensions.as_ref().expect("extensions must be Some");
+    assert!(ext.entries.contains_key("example-ns:meta"));
 }
