@@ -16,6 +16,12 @@ Thumbs.db
 .vscode/
 .idea/
 
+# Demo environment (lives in offf-demo repo)
+scripts/
+workers/
+docker-compose.yml
+demo-data/
+
 # Local runtime artifacts
 tests/conformance/conformance-report.json
 jobs/runtime/
