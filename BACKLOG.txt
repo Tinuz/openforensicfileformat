@@ -239,6 +239,14 @@ P1 - Daarna
   - Added: 2026-05-26
   - Status: done
 
+- [x] Demo Sprint 14: proofability core CLI + nested lineage + tamper checks (P1) ✅ 2026-05-27
+  - Add `offf-demo` commands: `verify-case`, `verify-analysis`, `lineage`, `provenance`, `report`, `tamper`
+  - Extend demo case with `object_edges.jsonl`, `derivations.jsonl`, nested object chain and scope labels
+  - Integrate proofability checks into run/smoke scripts
+  - Add tamper-scenario flow on a copied case to prove pre/post verification behavior
+  - Added: 2026-05-27
+  - Status: done
+
 - [ ] Object graph read/query APIs (P1)
   - Add list/get/children/parents/lineage endpoints and SDK wrappers
   - Add graph pagination/filtering for large cases

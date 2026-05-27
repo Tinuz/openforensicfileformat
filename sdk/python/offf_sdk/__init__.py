@@ -17,9 +17,19 @@ from .api import (
     write_edge_delta,
     write_object_delta,
 )
-from .container import OfffContainer
+try:
+    from .container import OfffContainer
+except ModuleNotFoundError as exc:
+    if exc.name != "pyarrow":
+        raise
+    OfffContainer = None
 from .errors import OfffError, ValidationError, UnsupportedVersionError
-from .schema_validation import SchemaError
+try:
+    from .schema_validation import SchemaError
+except ModuleNotFoundError as exc:
+    if exc.name != "jsonschema":
+        raise
+    SchemaError = None
 from .types import ChunkRecord, ProvenanceEvent
 
 __all__ = [
