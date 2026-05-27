@@ -257,10 +257,19 @@ P1 - Daarna
   - Mark legacy workers/results as non-forensic-grade where required
   - Provide migration guidance for v0.2 output contract adoption
 
-- [ ] Generic extension types + append-only APIs (P1)
+- [x] Generic extension types + append-only APIs (P1) ✅ 2026-05-27 [Sprint 15]
   - Add core structs and schemas: labels, scopes, sets, decisions, policy refs, access/denied/audit events
   - Add Access Service REST/gRPC append-only extension endpoints
   - Add validator checks for extension schema and referential integrity
+  - Status: done
+  - Progress: `offf-core::extensions` module met 8 typed JSONL-event structs (`LabelEvent`, `ScopeRecord`,
+    `SetRecord`, `DecisionRecord`, `PolicyRef`, `AccessEvent`, `DeniedAccessEvent`, `AuditEvent`),
+    append-only `append_jsonl`/`read_jsonl` generics, typed path-helpers en typed append/read functies.
+    `offf-verify --profile core+extensions` valideert nu ook de content van bekende extension-JSONL's.
+    Python SDK: `append_label_event`, `append_scope`, `append_set`, `append_decision`,
+    `append_policy_ref`, `append_access_event`, `append_denied_access_event`, `append_audit_event`
+    en corresponderende `list_*`/`get_*` read-helpers.
+    Access Service REST/gRPC endpoints voor extension write-pad volgen in Sprint 16.
 
 - [ ] Scope-aware jobs and workers (P1)
   - Extend `JobManifest` with `scope_ref`, `include_sets`, `exclude_sets`, `exclude_labels`

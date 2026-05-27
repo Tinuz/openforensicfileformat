@@ -306,6 +306,234 @@ pub struct AnnotationEvent {
     pub correction_of: Option<String>,
 }
 
+// ── Generic extension types (Sprint 15) ──────────────────────────────────────
+
+/// Generic target reference used in extension events.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtensionTarget {
+    /// "file" | "chunk" | "artifact" | "object" | "job" | "container" | "set" | "scope"
+    #[serde(rename = "type")]
+    pub target_type: String,
+    pub id: String,
+}
+
+/// Append-only label event stored in `extensions/labels/labels.jsonl`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LabelEvent {
+    pub label_event_id: String,
+    pub timestamp: String,
+    pub actor: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<ToolInfo>,
+    pub target: ExtensionTarget,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance_ref: Option<String>,
+}
+
+/// Date-range filter used inside a scope.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DateRange {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+}
+
+/// Inclusion filter for a scope.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ScopeInclude {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub file_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub object_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chunk_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifact_types: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub date_range: Option<DateRange>,
+}
+
+/// Exclusion filter for a scope.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ScopeExclude {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sets: Vec<String>,
+}
+
+/// Scope record stored in `extensions/scopes/scopes.jsonl`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScopeRecord {
+    pub scope_id: String,
+    pub created_at: String,
+    pub created_by: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include: Option<ScopeInclude>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exclude: Option<ScopeExclude>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub policy_refs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance_ref: Option<String>,
+}
+
+/// Members of a set.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SetMembers {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub file_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub object_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chunk_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifact_ids: Vec<String>,
+}
+
+/// Set record stored in `extensions/sets/{working,release,exclusion}_sets.jsonl`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetRecord {
+    pub set_id: String,
+    /// "working_set" | "release_set" | "exclusion_set"
+    pub set_type: String,
+    pub created_at: String,
+    pub created_by: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope_ref: Option<String>,
+    #[serde(default)]
+    pub members: SetMembers,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub policy_refs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance_ref: Option<String>,
+}
+
+/// Actor reference in a decision record.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DecisionActor {
+    /// "user" | "tool" | "system"
+    #[serde(rename = "type")]
+    pub actor_type: String,
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+}
+
+/// Decision record stored in `extensions/decisions/decisions.jsonl`.
+///
+/// Generic decision types: `release`, `exclude`, `restrict`, `unrestrict`,
+/// `review_required`, `review_completed`, `export_approved`, `export_denied`,
+/// `processing_allowed`, `processing_denied`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DecisionRecord {
+    pub decision_id: String,
+    pub timestamp: String,
+    pub actor: DecisionActor,
+    pub decision_type: String,
+    pub target: ExtensionTarget,
+    /// "approved" | "denied" | "pending"
+    pub outcome: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub policy_refs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance_ref: Option<String>,
+}
+
+/// Policy reference stored in `extensions/policies/policy_refs.jsonl`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PolicyRef {
+    pub policy_ref: String,
+    /// "external" | "internal"
+    pub policy_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issuer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issued_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uri: Option<String>,
+    /// `sha256:…` hash of the attached policy document, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance_ref: Option<String>,
+}
+
+/// Access event stored in `extensions/access/access_events.jsonl`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccessEvent {
+    pub access_event_id: String,
+    pub timestamp: String,
+    pub actor: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<ToolInfo>,
+    pub action: String,
+    pub target: ExtensionTarget,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub policy_refs: Vec<String>,
+    /// "allowed"
+    pub result: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance_ref: Option<String>,
+}
+
+/// Denied access event stored in `extensions/access/denied_access_events.jsonl`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeniedAccessEvent {
+    pub denied_event_id: String,
+    pub timestamp: String,
+    pub actor: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<ToolInfo>,
+    pub action: String,
+    pub target: ExtensionTarget,
+    /// "denied"
+    pub result: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason_code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub policy_refs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance_ref: Option<String>,
+}
+
+/// Generic audit event stored in `extensions/audit/audit_events.jsonl`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditEvent {
+    pub audit_event_id: String,
+    pub timestamp: String,
+    pub actor: String,
+    pub event_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<ExtensionTarget>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub details: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance_ref: Option<String>,
+}
+
 // ── Manifest ──────────────────────────────────────────────────────────────────
 
 /// Free-form extension entries, keyed by `namespace:name` strings.

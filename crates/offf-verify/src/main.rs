@@ -1106,6 +1106,7 @@ fn run_extension_checks(
         return;
     }
 
+    // ── Check 1: referenced files exist ──────────────────────────────────
     let mut missing = Vec::new();
     for rel in &paths {
         match container.exists(rel) {
@@ -1125,6 +1126,36 @@ fn run_extension_checks(
             "Extensions",
             format!("missing referenced extension files: {}", missing.join(", ")),
         );
+    }
+
+    // ── Check 2: validate known extension JSONL files ─────────────────────
+    if let Some(local_root) = container.local_path("") {
+        let results = offf_core::validate_extension_files(&local_root);
+        let mut any_issue = false;
+        for r in &results {
+            if r.issues.is_empty() {
+                report.ok(format!(
+                    "Extension JSONL {}: {} record(s) valid",
+                    r.rel_path, r.record_count
+                ));
+            } else {
+                any_issue = true;
+                for issue in &r.issues {
+                    report.fail(
+                        format!("Extension JSONL {}", r.rel_path),
+                        issue.clone(),
+                    );
+                }
+            }
+        }
+        if results.is_empty() {
+            report.ok("Extension JSONL: no known extension files present (optional)");
+        } else if !any_issue {
+            report.ok(format!(
+                "Extension JSONL: all {} file(s) structurally valid",
+                results.len()
+            ));
+        }
     }
 }
 
