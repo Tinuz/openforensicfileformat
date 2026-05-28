@@ -248,6 +248,10 @@ pub fn write_file_index(path: &Path, rows: &[FileIndexRow]) -> Result<(), OfffEr
         Field::new("chunk_refs", DataType::Utf8, false),
         Field::new("is_directory", DataType::Boolean, false),
         Field::new("is_deleted", DataType::Boolean, false),
+        Field::new("is_sparse", DataType::Boolean, false),
+        Field::new("is_compressed", DataType::Boolean, false),
+        Field::new("is_encrypted", DataType::Boolean, false),
+        Field::new("ads_streams", DataType::Utf8, false),
         Field::new("parser", DataType::Utf8, false),
         Field::new("parser_version", DataType::Utf8, false),
         Field::new("parser_status", DataType::Utf8, false),
@@ -275,6 +279,10 @@ pub fn write_file_index(path: &Path, rows: &[FileIndexRow]) -> Result<(), OfffEr
     let chunk_refs: StringArray = rows.iter().map(|r| Some(r.chunk_refs.as_str())).collect();
     let is_directory: BooleanArray = rows.iter().map(|r| Some(r.is_directory)).collect();
     let is_deleted: BooleanArray = rows.iter().map(|r| Some(r.is_deleted)).collect();
+    let is_sparse: BooleanArray = rows.iter().map(|r| Some(r.is_sparse)).collect();
+    let is_compressed: BooleanArray = rows.iter().map(|r| Some(r.is_compressed)).collect();
+    let is_encrypted: BooleanArray = rows.iter().map(|r| Some(r.is_encrypted)).collect();
+    let ads_streams: StringArray = rows.iter().map(|r| Some(r.ads_streams.as_str())).collect();
     let parser: StringArray = rows.iter().map(|r| Some(r.parser.as_str())).collect();
     let parser_version: StringArray = rows
         .iter()
@@ -304,6 +312,10 @@ pub fn write_file_index(path: &Path, rows: &[FileIndexRow]) -> Result<(), OfffEr
             Arc::new(chunk_refs) as ArrayRef,
             Arc::new(is_directory) as ArrayRef,
             Arc::new(is_deleted) as ArrayRef,
+            Arc::new(is_sparse) as ArrayRef,
+            Arc::new(is_compressed) as ArrayRef,
+            Arc::new(is_encrypted) as ArrayRef,
+            Arc::new(ads_streams) as ArrayRef,
             Arc::new(parser) as ArrayRef,
             Arc::new(parser_version) as ArrayRef,
             Arc::new(parser_status) as ArrayRef,
@@ -772,6 +784,406 @@ fn str_value_or_none(col: &StringArray, i: usize) -> Option<String> {
 
 fn u64_value_or_none(col: &UInt64Array, i: usize) -> Option<u64> {
     (!col.is_null(i)).then(|| col.value(i))
+}
+
+// ── Streaming batch reads ─────────────────────────────────────────────────────
+
+/// Stream object-index rows from `path` in batches, calling `f` for each
+/// decoded batch. `batch_size` limits rows per invocation; pass `0` to use
+/// the Parquet file's native row-group size.
+pub fn for_each_object_batch(
+    path: &Path,
+    batch_size: usize,
+    mut f: impl FnMut(&[DiscoveredObjectRow]) -> Result<(), OfffError>,
+) -> Result<(), OfffError> {
+    let file = fs::File::open(path)?;
+    let mut builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+    if batch_size > 0 {
+        builder = builder.with_batch_size(batch_size);
+    }
+    let reader = builder.build()?;
+    for batch in reader {
+        let batch = batch?;
+        let n = batch.num_rows();
+        let object_id = as_str_col(&batch, "object_id")?;
+        let object_type = as_str_col(&batch, "object_type")?;
+        let name = as_str_col(&batch, "name")?;
+        let logical_path = as_str_col(&batch, "logical_path")?;
+        let media_type = as_str_col(&batch, "media_type")?;
+        let size_bytes = as_u64_col(&batch, "size_bytes")?;
+        let sha256 = as_str_col(&batch, "sha256")?;
+        let source_layer = as_str_col(&batch, "source_layer")?;
+        let storage_ref = as_str_col(&batch, "storage_ref")?;
+        let root_source_ref = as_str_col(&batch, "root_source_ref")?;
+        let created_by_job_id = as_str_col(&batch, "created_by_job_id")?;
+        let parser_status = as_str_col(&batch, "parser_status")?;
+        let provenance_ref = as_str_col(&batch, "provenance_ref")?;
+        let schema_version = as_str_col(&batch, "schema_version")?;
+        let mut rows = Vec::with_capacity(n);
+        for i in 0..n {
+            rows.push(DiscoveredObjectRow {
+                object_id: object_id.value(i).to_string(),
+                object_type: object_type.value(i).to_string(),
+                name: str_value_or_none(name, i),
+                logical_path: str_value_or_none(logical_path, i),
+                media_type: str_value_or_none(media_type, i),
+                size_bytes: u64_value_or_none(size_bytes, i),
+                sha256: str_value_or_none(sha256, i),
+                source_layer: source_layer.value(i).to_string(),
+                storage_ref: str_value_or_none(storage_ref, i),
+                root_source_ref: str_value_or_none(root_source_ref, i),
+                created_by_job_id: str_value_or_none(created_by_job_id, i),
+                parser_status: parser_status.value(i).to_string(),
+                provenance_ref: str_value_or_none(provenance_ref, i),
+                schema_version: schema_version.value(i).to_string(),
+            });
+        }
+        f(&rows)?;
+    }
+    Ok(())
+}
+
+/// Stream edge rows from `path` in batches. See [`for_each_object_batch`].
+pub fn for_each_edge_batch(
+    path: &Path,
+    batch_size: usize,
+    mut f: impl FnMut(&[ObjectEdgeRow]) -> Result<(), OfffError>,
+) -> Result<(), OfffError> {
+    let file = fs::File::open(path)?;
+    let mut builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+    if batch_size > 0 {
+        builder = builder.with_batch_size(batch_size);
+    }
+    let reader = builder.build()?;
+    for batch in reader {
+        let batch = batch?;
+        let n = batch.num_rows();
+        let edge_id = as_str_col(&batch, "edge_id")?;
+        let parent_object_id = as_str_col(&batch, "parent_object_id")?;
+        let child_object_id = as_str_col(&batch, "child_object_id")?;
+        let relation_type = as_str_col(&batch, "relation_type")?;
+        let method = as_str_col(&batch, "method")?;
+        let logical_path = as_str_col(&batch, "logical_path")?;
+        let sequence = as_u64_col(&batch, "sequence")?;
+        let created_by_job_id = as_str_col(&batch, "created_by_job_id")?;
+        let provenance_ref = as_str_col(&batch, "provenance_ref")?;
+        let schema_version = as_str_col(&batch, "schema_version")?;
+        let mut rows = Vec::with_capacity(n);
+        for i in 0..n {
+            rows.push(ObjectEdgeRow {
+                edge_id: edge_id.value(i).to_string(),
+                parent_object_id: parent_object_id.value(i).to_string(),
+                child_object_id: child_object_id.value(i).to_string(),
+                relation_type: relation_type.value(i).to_string(),
+                method: str_value_or_none(method, i),
+                logical_path: str_value_or_none(logical_path, i),
+                sequence: u64_value_or_none(sequence, i),
+                created_by_job_id: str_value_or_none(created_by_job_id, i),
+                provenance_ref: str_value_or_none(provenance_ref, i),
+                schema_version: schema_version.value(i).to_string(),
+            });
+        }
+        f(&rows)?;
+    }
+    Ok(())
+}
+
+/// Stream derivation rows from `path` in batches. See [`for_each_object_batch`].
+pub fn for_each_derivation_batch(
+    path: &Path,
+    batch_size: usize,
+    mut f: impl FnMut(&[DerivationRow]) -> Result<(), OfffError>,
+) -> Result<(), OfffError> {
+    let file = fs::File::open(path)?;
+    let mut builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+    if batch_size > 0 {
+        builder = builder.with_batch_size(batch_size);
+    }
+    let reader = builder.build()?;
+    for batch in reader {
+        let batch = batch?;
+        let n = batch.num_rows();
+        let derivation_id = as_str_col(&batch, "derivation_id")?;
+        let parent_object_id = as_str_col(&batch, "parent_object_id")?;
+        let child_object_id = as_str_col(&batch, "child_object_id")?;
+        let job_id = as_str_col(&batch, "job_id")?;
+        let method = as_str_col(&batch, "method")?;
+        let tool_id = as_str_col(&batch, "tool_id")?;
+        let tool_name = as_str_col(&batch, "tool_name")?;
+        let tool_version = as_str_col(&batch, "tool_version")?;
+        let parameters_hash = as_str_col(&batch, "parameters_hash")?;
+        let input_sha256 = as_str_col(&batch, "input_sha256")?;
+        let output_sha256 = as_str_col(&batch, "output_sha256")?;
+        let storage_mode = as_str_col(&batch, "storage_mode")?;
+        let provenance_ref = as_str_col(&batch, "provenance_ref")?;
+        let created_at = as_str_col(&batch, "created_at")?;
+        let schema_version = as_str_col(&batch, "schema_version")?;
+        let mut rows = Vec::with_capacity(n);
+        for i in 0..n {
+            rows.push(DerivationRow {
+                derivation_id: derivation_id.value(i).to_string(),
+                parent_object_id: parent_object_id.value(i).to_string(),
+                child_object_id: child_object_id.value(i).to_string(),
+                job_id: job_id.value(i).to_string(),
+                method: method.value(i).to_string(),
+                tool_id: tool_id.value(i).to_string(),
+                tool_name: tool_name.value(i).to_string(),
+                tool_version: tool_version.value(i).to_string(),
+                parameters_hash: str_value_or_none(parameters_hash, i),
+                input_sha256: str_value_or_none(input_sha256, i),
+                output_sha256: str_value_or_none(output_sha256, i),
+                storage_mode: storage_mode.value(i).to_string(),
+                provenance_ref: str_value_or_none(provenance_ref, i),
+                created_at: created_at.value(i).to_string(),
+                schema_version: schema_version.value(i).to_string(),
+            });
+        }
+        f(&rows)?;
+    }
+    Ok(())
+}
+
+// ── Streaming batch writes ────────────────────────────────────────────────────
+
+/// Write object-index rows to `path` as multiple Parquet row groups.
+///
+/// Each `Vec<DiscoveredObjectRow>` in `batches` becomes one row group, letting
+/// callers bound peak memory during large incremental rebuilds.
+pub fn write_object_index_batched(
+    path: &Path,
+    batches: impl Iterator<Item = Vec<DiscoveredObjectRow>>,
+) -> Result<(), OfffError> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("object_id", DataType::Utf8, false),
+        Field::new("object_type", DataType::Utf8, false),
+        Field::new("name", DataType::Utf8, true),
+        Field::new("logical_path", DataType::Utf8, true),
+        Field::new("media_type", DataType::Utf8, true),
+        Field::new("size_bytes", DataType::UInt64, true),
+        Field::new("sha256", DataType::Utf8, true),
+        Field::new("source_layer", DataType::Utf8, false),
+        Field::new("storage_ref", DataType::Utf8, true),
+        Field::new("root_source_ref", DataType::Utf8, true),
+        Field::new("created_by_job_id", DataType::Utf8, true),
+        Field::new("parser_status", DataType::Utf8, false),
+        Field::new("provenance_ref", DataType::Utf8, true),
+        Field::new("schema_version", DataType::Utf8, false),
+    ]));
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let file = fs::File::create(path)?;
+    let props = WriterProperties::builder().build();
+    let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(props))?;
+    for rows in batches {
+        if rows.is_empty() {
+            continue;
+        }
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(StringArray::from_iter_values(
+                    rows.iter().map(|r| r.object_id.as_str()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter_values(
+                    rows.iter().map(|r| r.object_type.as_str()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter(
+                    rows.iter().map(|r| r.name.as_deref()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter(
+                    rows.iter().map(|r| r.logical_path.as_deref()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter(
+                    rows.iter().map(|r| r.media_type.as_deref()),
+                )) as ArrayRef,
+                Arc::new(UInt64Array::from_iter(rows.iter().map(|r| r.size_bytes))) as ArrayRef,
+                Arc::new(StringArray::from_iter(
+                    rows.iter().map(|r| r.sha256.as_deref()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter_values(
+                    rows.iter().map(|r| r.source_layer.as_str()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter(
+                    rows.iter().map(|r| r.storage_ref.as_deref()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter(
+                    rows.iter().map(|r| r.root_source_ref.as_deref()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter(
+                    rows.iter().map(|r| r.created_by_job_id.as_deref()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter_values(
+                    rows.iter().map(|r| r.parser_status.as_str()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter(
+                    rows.iter().map(|r| r.provenance_ref.as_deref()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter_values(
+                    rows.iter().map(|r| r.schema_version.as_str()),
+                )) as ArrayRef,
+            ],
+        )?;
+        writer.write(&batch)?;
+    }
+    writer.close()?;
+    Ok(())
+}
+
+/// Write edge rows to `path` as multiple Parquet row groups.
+/// See [`write_object_index_batched`] for the streaming write contract.
+pub fn write_object_edges_batched(
+    path: &Path,
+    batches: impl Iterator<Item = Vec<ObjectEdgeRow>>,
+) -> Result<(), OfffError> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("edge_id", DataType::Utf8, false),
+        Field::new("parent_object_id", DataType::Utf8, false),
+        Field::new("child_object_id", DataType::Utf8, false),
+        Field::new("relation_type", DataType::Utf8, false),
+        Field::new("method", DataType::Utf8, true),
+        Field::new("logical_path", DataType::Utf8, true),
+        Field::new("sequence", DataType::UInt64, true),
+        Field::new("created_by_job_id", DataType::Utf8, true),
+        Field::new("provenance_ref", DataType::Utf8, true),
+        Field::new("schema_version", DataType::Utf8, false),
+    ]));
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let file = fs::File::create(path)?;
+    let props = WriterProperties::builder().build();
+    let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(props))?;
+    for rows in batches {
+        if rows.is_empty() {
+            continue;
+        }
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(StringArray::from_iter_values(
+                    rows.iter().map(|r| r.edge_id.as_str()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter_values(
+                    rows.iter().map(|r| r.parent_object_id.as_str()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter_values(
+                    rows.iter().map(|r| r.child_object_id.as_str()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter_values(
+                    rows.iter().map(|r| r.relation_type.as_str()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter(
+                    rows.iter().map(|r| r.method.as_deref()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter(
+                    rows.iter().map(|r| r.logical_path.as_deref()),
+                )) as ArrayRef,
+                Arc::new(UInt64Array::from_iter(rows.iter().map(|r| r.sequence))) as ArrayRef,
+                Arc::new(StringArray::from_iter(
+                    rows.iter().map(|r| r.created_by_job_id.as_deref()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter(
+                    rows.iter().map(|r| r.provenance_ref.as_deref()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter_values(
+                    rows.iter().map(|r| r.schema_version.as_str()),
+                )) as ArrayRef,
+            ],
+        )?;
+        writer.write(&batch)?;
+    }
+    writer.close()?;
+    Ok(())
+}
+
+/// Write derivation rows to `path` as multiple Parquet row groups.
+/// See [`write_object_index_batched`] for the streaming write contract.
+pub fn write_derivations_batched(
+    path: &Path,
+    batches: impl Iterator<Item = Vec<DerivationRow>>,
+) -> Result<(), OfffError> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("derivation_id", DataType::Utf8, false),
+        Field::new("parent_object_id", DataType::Utf8, false),
+        Field::new("child_object_id", DataType::Utf8, false),
+        Field::new("job_id", DataType::Utf8, false),
+        Field::new("method", DataType::Utf8, false),
+        Field::new("tool_id", DataType::Utf8, false),
+        Field::new("tool_name", DataType::Utf8, false),
+        Field::new("tool_version", DataType::Utf8, false),
+        Field::new("parameters_hash", DataType::Utf8, true),
+        Field::new("input_sha256", DataType::Utf8, true),
+        Field::new("output_sha256", DataType::Utf8, true),
+        Field::new("storage_mode", DataType::Utf8, false),
+        Field::new("provenance_ref", DataType::Utf8, true),
+        Field::new("created_at", DataType::Utf8, false),
+        Field::new("schema_version", DataType::Utf8, false),
+    ]));
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let file = fs::File::create(path)?;
+    let props = WriterProperties::builder().build();
+    let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(props))?;
+    for rows in batches {
+        if rows.is_empty() {
+            continue;
+        }
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(StringArray::from_iter_values(
+                    rows.iter().map(|r| r.derivation_id.as_str()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter_values(
+                    rows.iter().map(|r| r.parent_object_id.as_str()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter_values(
+                    rows.iter().map(|r| r.child_object_id.as_str()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter_values(
+                    rows.iter().map(|r| r.job_id.as_str()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter_values(
+                    rows.iter().map(|r| r.method.as_str()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter_values(
+                    rows.iter().map(|r| r.tool_id.as_str()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter_values(
+                    rows.iter().map(|r| r.tool_name.as_str()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter_values(
+                    rows.iter().map(|r| r.tool_version.as_str()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter(
+                    rows.iter().map(|r| r.parameters_hash.as_deref()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter(
+                    rows.iter().map(|r| r.input_sha256.as_deref()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter(
+                    rows.iter().map(|r| r.output_sha256.as_deref()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter_values(
+                    rows.iter().map(|r| r.storage_mode.as_str()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter(
+                    rows.iter().map(|r| r.provenance_ref.as_deref()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter_values(
+                    rows.iter().map(|r| r.created_at.as_str()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter_values(
+                    rows.iter().map(|r| r.schema_version.as_str()),
+                )) as ArrayRef,
+            ],
+        )?;
+        writer.write(&batch)?;
+    }
+    writer.close()?;
+    Ok(())
 }
 
 #[cfg(test)]

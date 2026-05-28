@@ -1,5 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
+use chrono::Utc;
+use serde::{Deserialize, Serialize};
+
 use crate::types::{DerivationRow, DiscoveredObjectRow, ObjectEdgeRow};
 
 #[derive(Debug, Clone, Default)]
@@ -131,6 +134,176 @@ fn dfs<'a>(
 
     stack.remove(node);
     let _ = path.pop();
+}
+
+// ── Lineage statistics and export ────────────────────────────────────────────
+
+/// Summary statistics derived from the object graph.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LineageStats {
+    /// Total number of objects in the index.
+    pub object_count: usize,
+    /// Total number of directed edges between objects.
+    pub edge_count: usize,
+    /// Total number of derivation records.
+    pub derivation_count: usize,
+    /// IDs of objects that have no incoming edges (source objects).
+    pub root_object_ids: Vec<String>,
+    /// IDs of objects that have no outgoing edges (terminal objects).
+    pub leaf_object_ids: Vec<String>,
+    /// Length of the longest directed path from any root, measured in edges.
+    pub max_depth: usize,
+}
+
+/// Compute [`LineageStats`] from the three index tables.
+///
+/// `max_depth` is calculated with a BFS from all root nodes simultaneously.
+/// If the graph contains cycles the BFS terminates anyway because each node
+/// is visited at most once.
+pub fn compute_lineage_stats(
+    objects: &[DiscoveredObjectRow],
+    edges: &[ObjectEdgeRow],
+    derivations: &[DerivationRow],
+) -> LineageStats {
+    let all_ids: HashSet<&str> = objects.iter().map(|o| o.object_id.as_str()).collect();
+
+    // Build adjacency list: parent → children
+    let mut children: HashMap<&str, Vec<&str>> = HashMap::new();
+    let mut has_incoming: HashSet<&str> = HashSet::new();
+    for edge in edges {
+        children
+            .entry(edge.parent_object_id.as_str())
+            .or_default()
+            .push(edge.child_object_id.as_str());
+        has_incoming.insert(edge.child_object_id.as_str());
+    }
+
+    // Root objects: known objects with no incoming edge
+    let root_object_ids: Vec<String> = all_ids
+        .iter()
+        .filter(|id| !has_incoming.contains(*id))
+        .map(|id| id.to_string())
+        .collect();
+
+    // Leaf objects: known objects with no outgoing edge
+    let leaf_object_ids: Vec<String> = all_ids
+        .iter()
+        .filter(|id| !children.contains_key(*id))
+        .map(|id| id.to_string())
+        .collect();
+
+    // BFS from all roots to compute max depth (cycle-safe: visited set)
+    let mut max_depth = 0usize;
+    let mut visited: HashSet<&str> = HashSet::new();
+    // queue holds (node, depth)
+    let mut queue: std::collections::VecDeque<(&str, usize)> = root_object_ids
+        .iter()
+        .map(|id| (id.as_str(), 0usize))
+        .collect();
+    while let Some((node, depth)) = queue.pop_front() {
+        if visited.contains(node) {
+            continue;
+        }
+        visited.insert(node);
+        if depth > max_depth {
+            max_depth = depth;
+        }
+        if let Some(kids) = children.get(node) {
+            for &kid in kids {
+                if !visited.contains(kid) {
+                    queue.push_back((kid, depth + 1));
+                }
+            }
+        }
+    }
+
+    LineageStats {
+        object_count: objects.len(),
+        edge_count: edges.len(),
+        derivation_count: derivations.len(),
+        root_object_ids,
+        leaf_object_ids,
+        max_depth,
+    }
+}
+
+/// Write the object graph to `writer` in [Graphviz DOT format].
+///
+/// Each object becomes a node labelled with its ID, name, and object type.
+/// Each edge becomes a directed arc labelled with the relation type.
+///
+/// [Graphviz DOT format]: https://graphviz.org/doc/info/lang.html
+pub fn export_dot(
+    objects: &[DiscoveredObjectRow],
+    edges: &[ObjectEdgeRow],
+    writer: &mut impl std::io::Write,
+) -> std::io::Result<()> {
+    writeln!(writer, "digraph object_lineage {{")?;
+    writeln!(writer, "    graph [rankdir=LR];")?;
+    writeln!(writer, "    node  [shape=box, fontname=\"monospace\"];")?;
+    for obj in objects {
+        let label = format!(
+            "{}\\n{}\\n{}",
+            escape_dot(&obj.object_id),
+            escape_dot(obj.name.as_deref().unwrap_or("")),
+            escape_dot(&obj.object_type),
+        );
+        writeln!(
+            writer,
+            "    \"{}\" [label=\"{}\"];",
+            escape_dot(&obj.object_id),
+            label
+        )?;
+    }
+    for edge in edges {
+        writeln!(
+            writer,
+            "    \"{}\" -> \"{}\" [label=\"{}\"];",
+            escape_dot(&edge.parent_object_id),
+            escape_dot(&edge.child_object_id),
+            escape_dot(&edge.relation_type),
+        )?;
+    }
+    writeln!(writer, "}}")?;
+    Ok(())
+}
+
+fn escape_dot(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+}
+
+/// Serialise the full lineage dataset to a self-contained JSON value.
+///
+/// The returned object includes a UTC timestamp, basic statistics, validation
+/// results, and the raw row arrays so that consumers can reconstruct the graph
+/// without reading Parquet files.
+pub fn export_lineage_json(
+    container_id: &str,
+    objects: &[DiscoveredObjectRow],
+    edges: &[ObjectEdgeRow],
+    derivations: &[DerivationRow],
+) -> serde_json::Value {
+    let stats = compute_lineage_stats(objects, edges, derivations);
+    let validation = ObjectLineageValidator::validate(objects, edges, derivations);
+    serde_json::json!({
+        "generated_at": Utc::now().to_rfc3339(),
+        "container_id": container_id,
+        "stats": stats,
+        "valid": validation.is_valid(),
+        "validation": {
+            "missing_edge_parents":       validation.missing_edge_parents,
+            "missing_edge_children":      validation.missing_edge_children,
+            "missing_derivation_parents": validation.missing_derivation_parents,
+            "missing_derivation_children":validation.missing_derivation_children,
+            "invalid_derivation_links":   validation.invalid_derivation_links,
+            "cycles":                     validation.cycles,
+        },
+        "objects":     serde_json::to_value(objects).unwrap_or(serde_json::Value::Null),
+        "edges":       serde_json::to_value(edges).unwrap_or(serde_json::Value::Null),
+        "derivations": serde_json::to_value(derivations).unwrap_or(serde_json::Value::Null),
+    })
 }
 
 #[cfg(test)]

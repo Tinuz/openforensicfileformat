@@ -452,6 +452,76 @@ pub fn read_derived_object(container: &ContainerRef, sha256: &str) -> Result<Vec
     Ok(bytes)
 }
 
+/// Read a derived object in fixed-size chunks, calling `on_chunk` for each
+/// slice of bytes as it is read from disk.
+///
+/// For local containers the file is read through a [`std::io::BufReader`]
+/// sized to `buf_size` (0 ⇒ 4 MiB default), which keeps peak heap usage at
+/// `O(buf_size)` rather than `O(file_size)`.  For S3 containers the full
+/// object is fetched before chunking (the SDK has no partial-read API in
+/// synchronous mode), so only the callback invocations are chunked.
+///
+/// A SHA-256 digest is accumulated across all chunks and verified against
+/// `sha256` after the last chunk, mirroring the integrity guarantee of
+/// [`read_derived_object`].
+pub fn read_derived_object_streaming(
+    container: &ContainerRef,
+    sha256: &str,
+    buf_size: usize,
+    mut on_chunk: impl FnMut(&[u8]),
+) -> Result<(), OfffError> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+
+    let expected = sha256.strip_prefix("sha256:").unwrap_or(sha256);
+    let rel = derived_object_path(sha256);
+    let chunk = if buf_size == 0 { 4 * 1024 * 1024 } else { buf_size };
+
+    match container {
+        ContainerRef::Local(base) => {
+            let path = base.join(&rel);
+            let file = std::fs::File::open(&path)
+                .map_err(|e| OfffError::Io(e))?;
+            let mut reader = std::io::BufReader::with_capacity(chunk, file);
+            let mut hasher = Sha256::new();
+            let mut buf = vec![0u8; chunk];
+            loop {
+                let n = reader.read(&mut buf)
+                    .map_err(|e| OfffError::Io(e))?;
+                if n == 0 {
+                    break;
+                }
+                hasher.update(&buf[..n]);
+                on_chunk(&buf[..n]);
+            }
+            let actual = hex::encode(hasher.finalize());
+            if actual != expected {
+                return Err(OfffError::HashMismatch {
+                    chunk_id: rel,
+                    expected: expected.to_string(),
+                    actual,
+                });
+            }
+        }
+        ContainerRef::S3 { .. } => {
+            // S3 sync path: full fetch, then slice into chunks for the callback.
+            let bytes = container.read_bytes(&rel)?;
+            let actual = hex_sha256(&bytes);
+            if actual != expected {
+                return Err(OfffError::HashMismatch {
+                    chunk_id: rel,
+                    expected: expected.to_string(),
+                    actual,
+                });
+            }
+            for slice in bytes.chunks(chunk) {
+                on_chunk(slice);
+            }
+        }
+    }
+    Ok(())
+}
+
 fn join_key(prefix: &str, rel: &str) -> String {
     if prefix.is_empty() {
         rel.trim_start_matches('/').to_string()

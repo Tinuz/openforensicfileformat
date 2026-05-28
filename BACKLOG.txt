@@ -292,20 +292,21 @@ P1 - Daarna
 P2 - Later
 ----------
 
-- [ ] Object lineage scale/performance program (P2)
-  - Streaming reads for large derived objects
-  - Graph export formats and offline lineage reports
-  - Performance tuning for millions of objects/edges/derivations
-  - Memory-bounded merge/rebuild strategy for object indexes
+- [x] Object lineage scale/performance program (P2) ✅ 2026-05-30
+  - Streaming reads for large derived objects (`read_derived_object_streaming`)
+  - Graph export formats and offline lineage reports (`export_dot`, `export_lineage_json`)
+  - Performance tuning: `for_each_object_batch`, `for_each_edge_batch`, `for_each_derivation_batch`
+  - Memory-bounded merge/rebuild strategy (`--batch-size` flag on `offf-index objects`)
+  - New `offf-index export-lineage` subcommand (JSON, DOT, CSV)
 
-- [ ] Threat model and security mapping (P2)
+- [x] Threat model and security mapping (P2) ✅ 2026-05-29
   - Add `docs/threat-model.md` with threat-to-mitigation-to-test traceability
 
-- [ ] Versioning policy and migration path (P2)
+- [x] Versioning policy and migration path (P2) ✅ 2026-05-29
   - Add `docs/versioning.md`
   - Add `offf-migrate` path from v0.1 to v0.2 with evidence hash invariants
 
-- [ ] NTFS forensic depth improvements (P2)
+- [x] NTFS forensic depth improvements (P2) ✅ 2026-05-28
   - ATTRIBUTE_LIST support
   - ADS/sparse/compressed/encrypted modeling
   - Streaming parser memory hardening

@@ -8,10 +8,13 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 use offf_core::{
+    lineage::{export_dot, export_lineage_json, ObjectLineageValidator},
     ntfs::index_ntfs,
     parquet_io::{
-        read_object_edges, read_object_index, read_physical_to_chunk, write_derivations,
-        write_file_index, write_object_edges, write_object_index,
+        for_each_derivation_batch, for_each_edge_batch, for_each_object_batch,
+        read_derivations, read_object_edges, read_object_index, read_physical_to_chunk,
+        write_derivations, write_derivations_batched, write_file_index, write_object_edges,
+        write_object_edges_batched, write_object_index, write_object_index_batched,
     },
     partition::{detect_and_parse, detect_volume_type},
     provenance::ProvenanceWriter,
@@ -56,6 +59,22 @@ enum Command {
         /// When set, skip writing if indexes already exist (idempotent run)
         #[arg(long)]
         skip_existing: bool,
+        /// Stream the existing index in batches of this many rows when merging,
+        /// bounding peak heap to O(batch_size + delta_size) instead of
+        /// O(total_index_size + delta_size).  Omit for the default eager mode.
+        #[arg(long)]
+        batch_size: Option<usize>,
+    },
+    /// Export the object lineage graph as a self-contained offline report
+    ExportLineage {
+        /// Path to the OFFF container directory
+        container: PathBuf,
+        /// Output format: `json` (default), `dot`, or `csv`
+        #[arg(long, default_value = "json")]
+        format: String,
+        /// Write output to this file path (stdout if omitted)
+        #[arg(long)]
+        out: Option<PathBuf>,
     },
 }
 
@@ -72,7 +91,13 @@ fn main() -> Result<()> {
         Command::Objects {
             container,
             skip_existing,
-        } => cmd_objects(&container, skip_existing),
+            batch_size,
+        } => cmd_objects(&container, skip_existing, batch_size),
+        Command::ExportLineage {
+            container,
+            format,
+            out,
+        } => cmd_export_lineage(&container, &format, out.as_deref()),
     }
 }
 
@@ -336,7 +361,7 @@ fn resolve_partition(
 ///
 /// Merge strategy: first-writer-wins per object_id / edge_id / derivation_id.
 /// Job directories are sorted lexicographically to ensure reproducibility.
-fn cmd_objects(base: &Path, skip_existing: bool) -> Result<()> {
+fn cmd_objects(base: &Path, skip_existing: bool, batch_size: Option<usize>) -> Result<()> {
     let manifest_raw = fs::read_to_string(base.join("manifest.json"))
         .context("manifest.json not found – is this an OFFF container?")?;
     let _manifest: ManifestJson =
@@ -452,18 +477,40 @@ fn cmd_objects(base: &Path, skip_existing: bool) -> Result<()> {
     }
 
     // ── Merge with existing indexes (idempotent incremental rebuild) ──────
-    if idx_path.exists() {
-        let existing =
-            read_object_index(&idx_path).context("failed to read existing object_index.parquet")?;
-        for row in existing {
-            object_map.entry(row.object_id.clone()).or_insert(row);
+    if let Some(bs) = batch_size {
+        // Streaming mode: merge existing Parquet `bs` rows at a time to bound
+        // peak memory at O(bs + delta_size) rather than O(total + delta_size).
+        if idx_path.exists() {
+            merge_object_index_streaming(&idx_path, &deriv_path, &mut object_map, bs)?;
         }
-    }
-    if edges_path.exists() {
-        let existing = read_object_edges(&edges_path)
-            .context("failed to read existing object_edges.parquet")?;
-        for row in existing {
-            edge_map.entry(row.edge_id.clone()).or_insert(row);
+        if edges_path.exists() {
+            merge_edge_index_streaming(&edges_path, &mut edge_map, bs)?;
+        }
+        if deriv_path.exists() {
+            merge_derivation_index_streaming(&deriv_path, &mut deriv_map, bs)?;
+        }
+    } else {
+        // Eager mode (original behaviour).
+        if idx_path.exists() {
+            let existing = read_object_index(&idx_path)
+                .context("failed to read existing object_index.parquet")?;
+            for row in existing {
+                object_map.entry(row.object_id.clone()).or_insert(row);
+            }
+        }
+        if edges_path.exists() {
+            let existing = read_object_edges(&edges_path)
+                .context("failed to read existing object_edges.parquet")?;
+            for row in existing {
+                edge_map.entry(row.edge_id.clone()).or_insert(row);
+            }
+        }
+        if deriv_path.exists() {
+            let existing = read_derivations(&deriv_path)
+                .context("failed to read existing derivations.parquet")?;
+            for row in existing {
+                deriv_map.entry(row.derivation_id.clone()).or_insert(row);
+            }
         }
     }
 
@@ -516,3 +563,165 @@ fn cmd_objects(base: &Path, skip_existing: bool) -> Result<()> {
 
     Ok(())
 }
+
+// ── Streaming merge helpers ───────────────────────────────────────────────────
+
+/// Merge existing `object_index.parquet` into `map` using streaming batch
+/// reads so that at most `batch_size` existing rows are in memory at once.
+fn merge_object_index_streaming(
+    path: &Path,
+    _deriv_path: &Path,
+    map: &mut HashMap<String, DiscoveredObjectRow>,
+    batch_size: usize,
+) -> Result<()> {
+    for_each_object_batch(path, batch_size, |batch| {
+        for row in batch {
+            map.entry(row.object_id.clone()).or_insert_with(|| row.clone());
+        }
+        Ok(())
+    })
+    .with_context(|| format!("streaming read failed: {}", path.display()))
+}
+
+/// Merge existing `object_edges.parquet` into `map` using streaming batch reads.
+fn merge_edge_index_streaming(
+    path: &Path,
+    map: &mut HashMap<String, ObjectEdgeRow>,
+    batch_size: usize,
+) -> Result<()> {
+    for_each_edge_batch(path, batch_size, |batch| {
+        for row in batch {
+            map.entry(row.edge_id.clone()).or_insert_with(|| row.clone());
+        }
+        Ok(())
+    })
+    .with_context(|| format!("streaming read failed: {}", path.display()))
+}
+
+/// Merge existing `derivations.parquet` into `map` using streaming batch reads.
+fn merge_derivation_index_streaming(
+    path: &Path,
+    map: &mut HashMap<String, DerivationRow>,
+    batch_size: usize,
+) -> Result<()> {
+    for_each_derivation_batch(path, batch_size, |batch| {
+        for row in batch {
+            map.entry(row.derivation_id.clone()).or_insert_with(|| row.clone());
+        }
+        Ok(())
+    })
+    .with_context(|| format!("streaming read failed: {}", path.display()))
+}
+
+// ── offf-index export-lineage ─────────────────────────────────────────────────
+
+fn cmd_export_lineage(base: &Path, format: &str, out: Option<&Path>) -> Result<()> {
+    let manifest_raw = fs::read_to_string(base.join("manifest.json"))
+        .context("manifest.json not found – is this an OFFF container?")?;
+    let manifest: ManifestJson =
+        serde_json::from_str(&manifest_raw).context("invalid manifest.json")?;
+
+    let out_dir = base.join("indexes/objects");
+    let idx_path = out_dir.join("object_index.parquet");
+    let edges_path = out_dir.join("object_edges.parquet");
+    let deriv_path = out_dir.join("derivations.parquet");
+
+    let objects = if idx_path.exists() {
+        read_object_index(&idx_path).context("failed to read object_index.parquet")?
+    } else {
+        Vec::new()
+    };
+    let edges = if edges_path.exists() {
+        read_object_edges(&edges_path).context("failed to read object_edges.parquet")?
+    } else {
+        Vec::new()
+    };
+    let derivations = if deriv_path.exists() {
+        read_derivations(&deriv_path).context("failed to read derivations.parquet")?
+    } else {
+        Vec::new()
+    };
+
+    let mut output: Box<dyn std::io::Write> = match out {
+        Some(p) => {
+            if let Some(parent) = p.parent() {
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("cannot create output dir: {}", parent.display()))?;
+            }
+            Box::new(
+                fs::File::create(p)
+                    .with_context(|| format!("cannot create output file: {}", p.display()))?,
+            )
+        }
+        None => Box::new(std::io::stdout()),
+    };
+
+    match format {
+        "dot" => {
+            export_dot(&objects, &edges, &mut output)
+                .context("DOT export failed")?;
+        }
+        "csv" => {
+            // Header
+            writeln!(output, "object_id,object_type,name,parent_object_ids")?;
+            // Build parent map: child → comma-separated parent IDs
+            let mut parents: HashMap<&str, Vec<&str>> = HashMap::new();
+            for edge in &edges {
+                parents
+                    .entry(edge.child_object_id.as_str())
+                    .or_default()
+                    .push(edge.parent_object_id.as_str());
+            }
+            for obj in &objects {
+                let parent_list = parents
+                    .get(obj.object_id.as_str())
+                    .map(|v| v.join("|"))
+                    .unwrap_or_default();
+                writeln!(
+                    output,
+                    "{},{},{},{}",
+                    csv_escape(&obj.object_id),
+                    csv_escape(&obj.object_type),
+                    csv_escape(obj.name.as_deref().unwrap_or("")),
+                    csv_escape(&parent_list),
+                )?;
+            }
+        }
+        _ => {
+            // Default: JSON
+            let value = export_lineage_json(
+                &manifest.container_id,
+                &objects,
+                &edges,
+                &derivations,
+            );
+            serde_json::to_writer_pretty(&mut output, &value)
+                .context("JSON serialisation failed")?;
+            writeln!(output)?;
+        }
+    }
+
+    if out.is_some() {
+        eprintln!(
+            "Lineage exported ({} objects, {} edges, {} derivations) → {}",
+            objects.len(),
+            edges.len(),
+            derivations.len(),
+            out.unwrap().display()
+        );
+    }
+    Ok(())
+}
+
+fn csv_escape(s: &str) -> String {
+    if s.contains([',', '"', '\n']) {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
+// Bring streaming helpers into scope (re-exported from offf_core via pub use,
+// but we need the un-prefixed names used above).
+use offf_core::parquet_io::{for_each_derivation_batch, for_each_edge_batch, for_each_object_batch};
+use std::io::Write;

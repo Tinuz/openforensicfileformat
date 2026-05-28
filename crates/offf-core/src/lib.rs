@@ -18,7 +18,14 @@ pub use extensions::{
     read_audit_events, read_decisions, read_denied_access_events, read_label_events,
     read_policy_refs, read_scopes, read_sets, validate_extension_files,
 };
-pub use lineage::{ObjectLineageValidationReport, ObjectLineageValidator};
+pub use lineage::{
+    compute_lineage_stats, export_dot, export_lineage_json, LineageStats,
+    ObjectLineageValidationReport, ObjectLineageValidator,
+};
+pub use parquet_io::{
+    for_each_derivation_batch, for_each_edge_batch, for_each_object_batch,
+    write_derivations_batched, write_object_edges_batched, write_object_index_batched,
+};
 pub use types::{
     AccessEvent, AuditEvent, DateRange, DecisionActor, DecisionRecord, DerivationRow,
     DeniedAccessEvent, DiscoveredObjectRow, ExtensionTarget, LabelEvent, ManifestExtensions,
