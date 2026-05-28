@@ -689,3 +689,232 @@ def export_lineage_report(
     return report
 
 
+# ── Object-per-event append model (Sprint 19) ─────────────────────────────────
+
+_OBJECT_EVENTS_PATH = "indexes/objects/object_events.jsonl"
+_OBJECT_EDGE_EVENTS_PATH = "indexes/objects/object_edge_events.jsonl"
+
+
+def append_object_event(case_path: str | Path, event: dict[str, Any]) -> None:
+    """Append an ObjectEvent to indexes/objects/object_events.jsonl."""
+    append_jsonl_file(Path(case_path) / _OBJECT_EVENTS_PATH, event)
+
+
+def append_edge_event(case_path: str | Path, event: dict[str, Any]) -> None:
+    """Append an ObjectEdgeEvent to indexes/objects/object_edge_events.jsonl."""
+    append_jsonl_file(Path(case_path) / _OBJECT_EDGE_EVENTS_PATH, event)
+
+
+def read_object_events(case_path: str | Path) -> list[dict[str, Any]]:
+    """Read all ObjectEvent records from the event log."""
+    return read_jsonl_file(Path(case_path) / _OBJECT_EVENTS_PATH)
+
+
+def read_edge_events(case_path: str | Path) -> list[dict[str, Any]]:
+    """Read all ObjectEdgeEvent records from the event log."""
+    return read_jsonl_file(Path(case_path) / _OBJECT_EDGE_EVENTS_PATH)
+
+
+def rebuild_object_index_from_events(
+    case_path: str | Path,
+    *,
+    write_index: bool = True,
+) -> list[dict[str, Any]]:
+    """Replay the object event log and return the current object state.
+
+    Supports three event types:
+    - ``"discovered"`` / ``"updated"`` → insert or replace by ``object_id``.
+    - ``"removed"`` → delete by ``object_id``.
+    Unknown event types are silently ignored for forward compatibility.
+
+    Args:
+        case_path:   Path to the OFFF case directory.
+        write_index: When True (default), the result is also written to
+                     ``indexes/objects/object_index.jsonl``.
+
+    Returns:
+        The current object state as a list of dicts, sorted by ``object_id``.
+    """
+    state: dict[str, dict[str, Any]] = {}
+    for ev in read_object_events(case_path):
+        et = ev.get("event_type", "")
+        oid = ev.get("object_id")
+        if not oid:
+            continue
+        if et in ("discovered", "updated"):
+            payload = ev.get("payload") or {}
+            obj: dict[str, Any] = {**payload, "object_id": oid}
+            state[oid] = obj
+        elif et == "removed":
+            state.pop(oid, None)
+
+    result = sorted(state.values(), key=lambda o: o.get("object_id", ""))
+
+    if write_index:
+        idx_path = Path(case_path) / "indexes" / "objects" / "object_index.jsonl"
+        idx_path.parent.mkdir(parents=True, exist_ok=True)
+        with idx_path.open("w", encoding="utf-8") as f:
+            for obj in result:
+                f.write(json.dumps(obj, ensure_ascii=False) + "\n")
+
+    return result
+
+
+def rebuild_edge_index_from_events(
+    case_path: str | Path,
+    *,
+    write_index: bool = True,
+) -> list[dict[str, Any]]:
+    """Replay the edge event log and return the current edge state.
+
+    Supports:
+    - ``"discovered"`` → insert by ``edge_id``.
+    - ``"removed"`` → delete by ``edge_id``.
+
+    Args:
+        case_path:   Path to the OFFF case directory.
+        write_index: When True (default), writes result to
+                     ``indexes/objects/object_edges.jsonl``.
+
+    Returns:
+        The current edge state sorted by ``edge_id``.
+    """
+    state: dict[str, dict[str, Any]] = {}
+    for ev in read_edge_events(case_path):
+        et = ev.get("event_type", "")
+        eid = ev.get("edge_id")
+        if not eid:
+            continue
+        if et == "discovered":
+            edge: dict[str, Any] = {
+                "edge_id": eid,
+                "source_object_id": ev.get("source_object_id", ""),
+                "target_object_id": ev.get("target_object_id", ""),
+                "relationship": ev.get("relationship"),
+                "job_id": ev.get("job_id"),
+                "schema_version": ev.get("schema_version", ""),
+            }
+            state[eid] = edge
+        elif et == "removed":
+            state.pop(eid, None)
+
+    result = sorted(state.values(), key=lambda e: e.get("edge_id", ""))
+
+    if write_index:
+        idx_path = Path(case_path) / "indexes" / "objects" / "object_edges.jsonl"
+        idx_path.parent.mkdir(parents=True, exist_ok=True)
+        with idx_path.open("w", encoding="utf-8") as f:
+            for edge in result:
+                f.write(json.dumps(edge, ensure_ascii=False) + "\n")
+
+    return result
+
+
+# ── JobWriter context manager (Sprint 21) ─────────────────────────────────────
+
+class JobWriter:
+    """Context manager for writing analysis job results to an OFFF case.
+
+    Usage::
+
+        with JobWriter(case_path, job_id) as w:
+            w.write_hits(rows, "keyword_hits.parquet")
+            w.seal(task="keyword_scan", worker={"name": "myworker", "version": "1.0"},
+                   statistics={"results_written": len(rows)}, status="completed")
+
+    :raises FileExistsError: If ``result_manifest.json`` already exists for the job.
+    """
+
+    def __init__(self, case_path: str | Path, job_id: str) -> None:
+        self._case = Path(case_path)
+        self._job_id = job_id
+        self._out_dir = self._case / "analysis" / "jobs" / job_id
+        self._artifacts: list[str] = []
+        self._sealed = False
+
+    def __enter__(self) -> "JobWriter":
+        manifest_path = self._out_dir / "result_manifest.json"
+        if manifest_path.exists():
+            raise FileExistsError(
+                f"result_manifest.json already exists for job {self._job_id!r}"
+            )
+        self._out_dir.mkdir(parents=True, exist_ok=True)
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        # Do not auto-seal on exception; let the caller handle it.
+        pass
+
+    def _write_rows(self, rows: list[dict[str, Any]], filename: str) -> Path:
+        """Write *rows* as JSONL to *filename* inside the job output directory."""
+        p = self._out_dir / filename
+        with p.open("w", encoding="utf-8") as f:
+            for row in rows:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        self._artifacts.append(filename)
+        return p
+
+    def write_hits(self, rows: list[dict[str, Any]], filename: str = "hits.jsonl") -> Path:
+        """Write keyword or YARA hit rows."""
+        return self._write_rows(rows, filename)
+
+    def write_objects(self, rows: list[dict[str, Any]], filename: str = "objects.jsonl") -> Path:
+        """Write discovered object rows."""
+        return self._write_rows(rows, filename)
+
+    def write_edges(self, rows: list[dict[str, Any]], filename: str = "edges.jsonl") -> Path:
+        """Write object edge rows."""
+        return self._write_rows(rows, filename)
+
+    def seal(
+        self,
+        *,
+        task: str,
+        worker: dict[str, Any],
+        statistics: dict[str, Any],
+        status: str = "completed",
+        input_ref: dict[str, Any] | None = None,
+        started_at: str | None = None,
+    ) -> Path:
+        """Write ``result_manifest.json`` and mark the job as complete.
+
+        Args:
+            task:        Job task name (e.g. ``"keyword_scan"``).
+            worker:      Dict with at least ``name`` and ``version`` keys.
+            statistics:  Dict of counters/metrics for the result manifest.
+            status:      Job status string (default: ``"completed"``).
+            input_ref:   Optional dict describing the input container/source.
+            started_at:  ISO 8601 timestamp; defaults to current time.
+
+        Returns:
+            Path to the written ``result_manifest.json``.
+        """
+        if self._sealed:
+            raise RuntimeError("JobWriter.seal() has already been called")
+
+        artifacts_meta: list[dict[str, Any]] = []
+        for fname in self._artifacts:
+            p = self._out_dir / fname
+            if p.exists():
+                artifacts_meta.append({
+                    "path": fname,
+                    "sha256": f"sha256:{sha256_file(p)}",
+                    "size_bytes": p.stat().st_size,
+                })
+
+        manifest: dict[str, Any] = {
+            "job_id": self._job_id,
+            "task": task,
+            "worker": worker,
+            "input": input_ref or {},
+            "output_artifacts": artifacts_meta,
+            "statistics": statistics,
+            "created_at": started_at or utc_now_iso(),
+            "completed_at": utc_now_iso(),
+            "status": status,
+        }
+
+        manifest_path = self._out_dir / "result_manifest.json"
+        write_json_file(manifest_path, manifest)
+        self._sealed = True
+        return manifest_path

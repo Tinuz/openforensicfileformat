@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import collections
 import hashlib
 import json
 from datetime import datetime, timezone
@@ -15,6 +16,29 @@ from .schema_validation import SchemaError, validate_acquisition, validate_manif
 from .types import ChunkRecord, ProvenanceEvent
 
 
+class _LRUCache:
+    """Simple bounded LRU cache backed by collections.OrderedDict."""
+
+    def __init__(self, max_size: int = 64) -> None:
+        self._max = max(1, max_size)
+        self._data: collections.OrderedDict[int, bytes] = collections.OrderedDict()
+
+    def get(self, key: int) -> bytes | None:
+        if key not in self._data:
+            return None
+        self._data.move_to_end(key)
+        return self._data[key]
+
+    def put(self, key: int, value: bytes) -> None:
+        if key in self._data:
+            self._data.move_to_end(key)
+        else:
+            self._data[key] = value
+            if len(self._data) > self._max:
+                self._data.popitem(last=False)
+        self._data[key] = value  # update value in-place after move_to_end
+
+
 class OfffContainer:
     """SDK entry point for reading and validating OFFF containers.
 
@@ -26,8 +50,31 @@ class OfffContainer:
     """
 
     SUPPORTED_VERSION = "0.1.0"
+    # Version prefixes accepted by the "permissive" and default "auto" profiles.
+    _SUPPORTED_PREFIXES = ("0.1.", "0.2.")
 
-    def __init__(self, container_path: str | Path) -> None:
+    def __init__(
+        self,
+        container_path: str | Path,
+        *,
+        max_cache_entries: int = 64,
+        cache: bool = True,
+        profile: str = "auto",
+    ) -> None:
+        """Open an OFFF container.
+
+        Args:
+            container_path:    Path to the ``.offf`` directory.
+            max_cache_entries: Maximum number of plaintext chunks to hold in the
+                               LRU cache (default 64).  Ignored when *cache* is
+                               False.
+            cache:             When False, chunk reads are never cached.
+            profile:           Version enforcement mode.
+                               - ``"auto"``       – accept 0.1.x and 0.2.x
+                               - ``"strict"``     – exact match with
+                                 :attr:`SUPPORTED_VERSION` only.
+                               - ``"permissive"`` – skip version check entirely.
+        """
         self.base_path = Path(container_path)
         if not self.base_path.exists():
             raise OfffError(f"container path does not exist: {self.base_path}")
@@ -36,13 +83,22 @@ class OfffContainer:
         self.acquisition = self._read_json("acquisition.json")
 
         version = self.manifest.get("offf_version")
-        if version != self.SUPPORTED_VERSION:
-            raise UnsupportedVersionError(
-                f"unsupported OFFF version: {version} (expected {self.SUPPORTED_VERSION})"
-            )
+        if profile == "strict":
+            if version != self.SUPPORTED_VERSION:
+                raise UnsupportedVersionError(
+                    f"unsupported OFFF version: {version} (expected {self.SUPPORTED_VERSION})"
+                )
+        elif profile == "auto":
+            if not any(str(version or "").startswith(p) for p in self._SUPPORTED_PREFIXES):
+                raise UnsupportedVersionError(
+                    f"unsupported OFFF version: {version!r} "
+                    f"(supported prefixes: {self._SUPPORTED_PREFIXES})"
+                )
+        # profile == "permissive" → no version check
 
+        self._cache_enabled = cache
+        self._chunk_cache: _LRUCache = _LRUCache(max_size=max_cache_entries)
         self._chunk_map: list[ChunkRecord] | None = None
-        self._chunk_cache: dict[int, bytes] = {}
 
     def _read_json(self, rel_path: str) -> dict[str, Any]:
         path = self.base_path / rel_path
@@ -121,9 +177,10 @@ class OfffContainer:
         )
 
     def read_chunk_plaintext(self, chunk: ChunkRecord, verify: bool = True) -> bytes:
-        cached = self._chunk_cache.get(chunk.sequence)
-        if cached is not None:
-            return cached
+        if self._cache_enabled:
+            cached = self._chunk_cache.get(chunk.sequence)
+            if cached is not None:
+                return cached
 
         path = self.chunk_file_path(chunk)
         if not path.exists():
@@ -153,7 +210,7 @@ class OfffContainer:
                     f"expected={chunk.plaintext_sha256} actual={actual_plain}"
                 )
 
-        self._chunk_cache[chunk.sequence] = plain
+        self._chunk_cache.put(chunk.sequence, plain)
         return plain
 
     def read_bytes(self, source_offset: int, length: int, verify_chunks: bool = True) -> bytes:

@@ -26,8 +26,8 @@ use serde::{de::DeserializeOwned, Serialize};
 use crate::{
     error::OfffError,
     types::{
-        AccessEvent, AuditEvent, DecisionRecord, DeniedAccessEvent, LabelEvent, PolicyRef,
-        ScopeRecord, SetRecord,
+        AccessEvent, AuditEvent, DecisionRecord, DeniedAccessEvent, DiscoveredObjectRow,
+        LabelEvent, ObjectEdgeEvent, ObjectEvent, PolicyRef, ScopeRecord, SetRecord,
     },
 };
 
@@ -181,6 +181,67 @@ pub fn append_audit_event(case: &Path, ev: &AuditEvent) -> Result<(), OfffError>
 
 pub fn read_audit_events(case: &Path) -> Result<Vec<AuditEvent>, OfffError> {
     read_jsonl(&audit_events_path(case))
+}
+
+// ── Object event log helpers (Sprint 19) ─────────────────────────────────────
+
+pub fn object_events_path(case: &Path) -> PathBuf {
+    case.join("indexes/objects/object_events.jsonl")
+}
+
+pub fn object_edge_events_path(case: &Path) -> PathBuf {
+    case.join("indexes/objects/object_edge_events.jsonl")
+}
+
+/// Append an immutable object discovery/update/removal event.
+pub fn append_object_event(case: &Path, ev: &ObjectEvent) -> Result<(), OfffError> {
+    append_jsonl(&object_events_path(case), ev)
+}
+
+pub fn read_object_events(case: &Path) -> Result<Vec<ObjectEvent>, OfffError> {
+    read_jsonl(&object_events_path(case))
+}
+
+/// Append an immutable object edge discovery/removal event.
+pub fn append_object_edge_event(case: &Path, ev: &ObjectEdgeEvent) -> Result<(), OfffError> {
+    append_jsonl(&object_edge_events_path(case), ev)
+}
+
+pub fn read_object_edge_events(case: &Path) -> Result<Vec<ObjectEdgeEvent>, OfffError> {
+    read_jsonl(&object_edge_events_path(case))
+}
+
+/// Replay the object event log into a sorted `Vec<DiscoveredObjectRow>`.
+///
+/// Replay rules (events applied in log order):
+/// - `"discovered"` / `"updated"` → insert or replace by `object_id`
+/// - `"removed"` → delete by `object_id`
+///
+/// Unknown event types are silently ignored so the log is forward-compatible.
+pub fn rebuild_object_index_from_events(
+    case: &Path,
+) -> Result<Vec<DiscoveredObjectRow>, OfffError> {
+    use std::collections::HashMap;
+    let events = read_object_events(case)?;
+    let mut index: HashMap<String, DiscoveredObjectRow> = HashMap::new();
+    for ev in events {
+        match ev.event_type.as_str() {
+            "discovered" | "updated" => {
+                if let Some(payload) = ev.payload {
+                    let row: DiscoveredObjectRow = serde_json::from_value(payload)
+                        .map_err(|e| OfffError::InvalidContainer(e.to_string()))?;
+                    index.insert(ev.object_id, row);
+                }
+            }
+            "removed" => {
+                index.remove(&ev.object_id);
+            }
+            _ => {}
+        }
+    }
+    let mut rows: Vec<DiscoveredObjectRow> = index.into_values().collect();
+    rows.sort_by(|a, b| a.object_id.cmp(&b.object_id));
+    Ok(rows)
 }
 
 // ── Validation helpers (used by offf-verify core+extensions profile) ──────────

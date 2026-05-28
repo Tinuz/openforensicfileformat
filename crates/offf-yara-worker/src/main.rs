@@ -7,7 +7,10 @@ use serde::Serialize;
 
 use offf_core::{
     chunk::hex_sha256,
-    parquet_io::{read_physical_to_chunk, read_physical_to_chunk_bytes, write_yara_hits},
+    parquet_io::{
+        read_file_index_for_resolution, read_physical_to_chunk, read_physical_to_chunk_bytes,
+        write_yara_hits,
+    },
     provenance::ProvenanceWriter,
     storage::{read_chunk_verified, ContainerRef},
     types::{JobManifest, ManifestJson, ToolInfo, YaraHitRow},
@@ -216,6 +219,40 @@ fn main() -> Result<()> {
     all_hits.sort_by_key(|h| (h.physical_offset, h.rule_name.clone()));
     for (i, hit) in all_hits.iter_mut().enumerate() {
         hit.hit_id = format!("yara-hit-{i:08}");
+    }
+
+    // ── file_id resolution (non-fatal) ────────────────────────────────────
+    let chunk_to_file: std::collections::HashMap<String, Vec<u64>> = {
+        let mut map: std::collections::HashMap<String, Vec<u64>> =
+            std::collections::HashMap::new();
+        if let Some(fs_base) = container.local_path("indexes/filesystems") {
+            if let Ok(rd) = fs::read_dir(&fs_base) {
+                for entry in rd.flatten() {
+                    let p = entry.path().join("file_index.parquet");
+                    if let Ok(rows) = read_file_index_for_resolution(&p) {
+                        for (fid, chunk_refs_json) in rows {
+                            if let Ok(chunk_ids) =
+                                serde_json::from_str::<Vec<String>>(&chunk_refs_json)
+                            {
+                                for cid in chunk_ids {
+                                    map.entry(cid).or_default().push(fid);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        map
+    };
+    if !chunk_to_file.is_empty() {
+        for hit in &mut all_hits {
+            if let Some(fids) = chunk_to_file.get(&hit.chunk_id) {
+                if fids.len() == 1 {
+                    hit.file_id = fids[0].to_string();
+                }
+            }
+        }
     }
 
     println!("Hits found:  {}", all_hits.len());

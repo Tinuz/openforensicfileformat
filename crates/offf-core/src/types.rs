@@ -238,6 +238,46 @@ pub struct DerivationRow {
     pub schema_version: String,
 }
 
+// ── Object event log (Sprint 19) ─────────────────────────────────────────────
+
+/// Append-only event for object index state changes.
+/// Stored in `indexes/objects/object_events.jsonl`.
+///
+/// Workers append events; the derived `object_index.jsonl` / Parquet index is
+/// rebuilt deterministically via `offf-index objects --from-events`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObjectEvent {
+    pub event_id: String,
+    pub timestamp: String,
+    /// "discovered" | "updated" | "removed"
+    pub event_type: String,
+    pub object_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<String>,
+    /// Full `DiscoveredObjectRow`-compatible payload for "discovered" / "updated".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload: Option<serde_json::Value>,
+    pub schema_version: String,
+}
+
+/// Append-only event for object edge state changes.
+/// Stored in `indexes/objects/object_edge_events.jsonl`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObjectEdgeEvent {
+    pub event_id: String,
+    pub timestamp: String,
+    /// "discovered" | "removed"
+    pub event_type: String,
+    pub edge_id: String,
+    pub source_object_id: String,
+    pub target_object_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relationship: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<String>,
+    pub schema_version: String,
+}
+
 // ── Analysis hit rows ─────────────────────────────────────────────────────────
 
 /// One row in `analysis/keyword_hits.parquet`.

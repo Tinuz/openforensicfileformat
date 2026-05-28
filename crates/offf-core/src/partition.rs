@@ -14,6 +14,24 @@ use crate::{
     types::{ChunkMetadata, PartitionEntry, PartitionTableJson, ToolInfo, TOOL_VERSION},
 };
 
+// ── CRC32 (IEEE 802.3 / ISO 3309 — same polynomial used by GPT and zlib) ────
+
+fn crc32(data: &[u8]) -> u32 {
+    const POLY: u32 = 0xEDB8_8320;
+    let mut crc: u32 = 0xFFFF_FFFF;
+    for &byte in data {
+        crc ^= byte as u32;
+        for _ in 0..8 {
+            if crc & 1 != 0 {
+                crc = (crc >> 1) ^ POLY;
+            } else {
+                crc >>= 1;
+            }
+        }
+    }
+    crc ^ 0xFFFF_FFFF
+}
+
 // ── Known GPT type GUIDs ──────────────────────────────────────────────────────
 
 static KNOWN_TYPE_GUIDS: &[(&str, &str)] = &[
@@ -251,14 +269,40 @@ pub fn detect_and_parse(
         match parse_gpt(base, chunks, &sector1, ss, container_id, tool_name) {
             Ok(t) => return Ok(t),
             Err(e) => {
-                // Fall through to MBR if GPT parse fails
-                eprintln!("GPT parse failed ({e}), falling back to MBR");
+                eprintln!("Primary GPT parse failed ({e}), trying backup GPT");
+                // Backup GPT header LBA is at primary header offset 32 (8 bytes LE)
+                if sector1.len() >= 40 {
+                    let alt_lba = u64::from_le_bytes(sector1[32..40].try_into().unwrap());
+                    if alt_lba > 1 {
+                        let alt_offset = alt_lba * ss;
+                        if let Ok(backup_sector) =
+                            read_bytes_at(base, chunks, alt_offset, ss)
+                        {
+                            match parse_gpt(
+                                base,
+                                chunks,
+                                &backup_sector,
+                                ss,
+                                container_id,
+                                tool_name,
+                            ) {
+                                Ok(t) => {
+                                    eprintln!("Backup GPT used successfully");
+                                    return Ok(t);
+                                }
+                                Err(e2) => {
+                                    eprintln!("Backup GPT also failed ({e2}), falling back to MBR");
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
 
     if has_mbr_sig {
-        return parse_mbr(chunks, &sector0, ss, container_id, tool_name);
+        return parse_mbr(base, chunks, &sector0, ss, container_id, tool_name);
     }
 
     // No recognisable partition table
@@ -279,6 +323,7 @@ pub fn detect_and_parse(
 // ── MBR parsing ───────────────────────────────────────────────────────────────
 
 fn parse_mbr(
+    base: &Path,
     chunks: &[ChunkMetadata],
     sector0: &[u8],
     sector_size: u64,
@@ -293,6 +338,8 @@ fn parse_mbr(
 
     let mut partitions = Vec::new();
     let mut mbr_index = 1u32;
+    let mut extended_lba: Option<u64> = None;
+    let mut extended_type: u8 = 0;
 
     for i in 0..4usize {
         let entry = &sector0[0x1BE + i * 16..0x1BE + (i + 1) * 16];
@@ -307,6 +354,13 @@ fn parse_mbr(
         let lba_count = u32::from_le_bytes(entry[12..16].try_into().unwrap()) as u64;
 
         if lba_count == 0 {
+            continue;
+        }
+
+        // Extended partition — defer EBR chain parsing
+        if part_type == 0x05 || part_type == 0x0F {
+            extended_lba = Some(lba_start);
+            extended_type = part_type;
             continue;
         }
 
@@ -332,6 +386,68 @@ fn parse_mbr(
         });
 
         mbr_index += 1;
+    }
+
+    // ── Extended MBR / EBR chain ─────────────────────────────────────────
+    if let Some(ext_lba) = extended_lba {
+        let ext_type_name = format!("{} (0x{:02X})", mbr_type_name(extended_type), extended_type);
+        let _ = ext_type_name; // informational only
+        let mut ebr_lba = ext_lba; // current EBR sector LBA (absolute)
+        let mut ebr_index = 1u32;
+        const MAX_EBR_CHAIN: u32 = 256; // guard against malformed chains
+
+        while ebr_index <= MAX_EBR_CHAIN {
+            let ebr_offset = ebr_lba * sector_size;
+            let ebr_data = match read_bytes_at(base, chunks, ebr_offset, sector_size) {
+                Ok(d) => d,
+                Err(_) => break, // unreadable sector → end of chain
+            };
+            if ebr_data.len() < 512 {
+                break;
+            }
+            // Entry 0: logical partition (relative to this EBR)
+            let e0 = &ebr_data[0x1BE..0x1CE];
+            let lp_type = e0[4];
+            let lp_rel = u32::from_le_bytes(e0[8..12].try_into().unwrap()) as u64;
+            let lp_count = u32::from_le_bytes(e0[12..16].try_into().unwrap()) as u64;
+
+            if lp_count > 0 && lp_type != 0x00 {
+                let abs_lba = ebr_lba + lp_rel;
+                let start_offset = abs_lba * sector_size;
+                let length = lp_count * sector_size;
+                let chunk_refs = chunk_refs_for_range(chunks, start_offset, length);
+                partitions.push(PartitionEntry {
+                    partition_id: format!("ebr-{}", ebr_index),
+                    name: None,
+                    partition_type: format!(
+                        "{} (0x{:02X})",
+                        mbr_type_name(lp_type),
+                        lp_type
+                    ),
+                    type_guid: None,
+                    unique_guid: None,
+                    start_offset,
+                    length,
+                    first_lba: abs_lba,
+                    last_lba: abs_lba + lp_count - 1,
+                    attributes: None,
+                    bootable: None,
+                    chunk_refs,
+                    filesystem_type: None,
+                });
+            }
+
+            // Entry 1: next EBR (relative to extended partition start)
+            let e1 = &ebr_data[0x1CE..0x1DE];
+            let next_rel = u32::from_le_bytes(e1[8..12].try_into().unwrap()) as u64;
+            let next_count = u32::from_le_bytes(e1[12..16].try_into().unwrap()) as u64;
+
+            if next_count == 0 || e1[4] == 0x00 {
+                break; // end of chain
+            }
+            ebr_lba = ext_lba + next_rel;
+            ebr_index += 1;
+        }
     }
 
     Ok(PartitionTableJson {
@@ -369,6 +485,22 @@ fn parse_gpt(
         return Err(OfffError::InvalidContainer(
             "GPT signature not found".into(),
         ));
+    }
+
+    // ── CRC32 validation ────────────────────────────────────────────────
+    // Header CRC is at bytes 16-19 (LE). Zero it out and compute CRC of the
+    // first 92 bytes (header_size, though we use 92 per UEFI spec).
+    let stored_crc = u32::from_le_bytes(header[16..20].try_into().unwrap());
+    let mut header_for_crc = header[..92].to_vec();
+    header_for_crc[16] = 0;
+    header_for_crc[17] = 0;
+    header_for_crc[18] = 0;
+    header_for_crc[19] = 0;
+    let computed_crc = crc32(&header_for_crc);
+    if computed_crc != stored_crc {
+        return Err(OfffError::InvalidContainer(format!(
+            "GPT header CRC32 mismatch: stored=0x{stored_crc:08x} computed=0x{computed_crc:08x}"
+        )));
     }
 
     let disk_guid = format_gpt_guid(&header[56..72]);

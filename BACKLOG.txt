@@ -291,19 +291,22 @@ P1 - Daarna
     are set. `offf-jobs create-keyword/create-yara/create-object-worker` gain
     `--scope-ref`, `--include-set`, `--policy-ref` flags.
 
-- [ ] Object-per-event append model for object storage (P1)
+- [x] Object-per-event append model for object storage (P1) ✅ 2026-05-31
   - Replace JSONL read-modify-write patterns with immutable event objects
   - Provide index rebuild path from event objects to derived JSONL indexes
+  - Done: `ObjectEvent`/`ObjectEdgeEvent` structs + `append_object_event`, `read_object_events`, `rebuild_object_index_from_events` (Rust + Python SDK); `offf-index objects --from-events` flag
 
-- [ ] Indexing hardening GPT/MBR and worker quality upgrades (P1)
+- [x] Indexing hardening GPT/MBR and worker quality upgrades (P1) ✅ 2026-05-31
   - GPT CRC + backup GPT checks
   - Extended MBR/EBR support
   - file_id resolution for hits and chunk-boundary matching support
+  - Done: `crc32()` inline; GPT header CRC32 validation + backup GPT fallback; EBR chain parsing in `parse_mbr`; `file_id` resolution in keyword/yara workers from `file_index.parquet`; cross-chunk junction scanning in keyword worker
 
-- [ ] Python SDK hardening and forward compatibility (P1)
+- [x] Python SDK hardening and forward compatibility (P1) ✅ 2026-05-31
   - Bounded LRU chunk cache and cache disable option
   - Append-only analysis writer APIs (job-specific)
   - Version profile support for 0.1.x and 0.2.x with safe extension ignore
+  - Done: `_LRUCache` (OrderedDict-backed, max_size eviction); `OfffContainer(cache=False, max_cache_entries=N, profile='auto'|'strict'|'permissive')`; `JobWriter` context manager with `write_hits/objects/edges` + `seal()`; Sprint 19 Python: `append_object_event`, `append_edge_event`, `rebuild_object_index_from_events`, `rebuild_edge_index_from_events`
 
 P2 - Later
 ----------

@@ -18,6 +18,7 @@ use offf_core::{
     },
     partition::{detect_and_parse, detect_volume_type},
     provenance::ProvenanceWriter,
+    rebuild_object_index_from_events,
     types::{DerivationRow, DiscoveredObjectRow, ManifestJson, ObjectEdgeRow},
 };
 const TOOL_NAME: &str = "offf-index";
@@ -64,6 +65,10 @@ enum Command {
         /// O(total_index_size + delta_size).  Omit for the default eager mode.
         #[arg(long)]
         batch_size: Option<usize>,
+        /// Rebuild object index from `indexes/objects/object_events.jsonl` (event-log mode)
+        /// instead of scanning job delta files.
+        #[arg(long)]
+        from_events: bool,
     },
     /// Export the object lineage graph as a self-contained offline report
     ExportLineage {
@@ -92,7 +97,8 @@ fn main() -> Result<()> {
             container,
             skip_existing,
             batch_size,
-        } => cmd_objects(&container, skip_existing, batch_size),
+            from_events,
+        } => cmd_objects(&container, skip_existing, batch_size, from_events),
         Command::ExportLineage {
             container,
             format,
@@ -361,7 +367,12 @@ fn resolve_partition(
 ///
 /// Merge strategy: first-writer-wins per object_id / edge_id / derivation_id.
 /// Job directories are sorted lexicographically to ensure reproducibility.
-fn cmd_objects(base: &Path, skip_existing: bool, batch_size: Option<usize>) -> Result<()> {
+fn cmd_objects(
+    base: &Path,
+    skip_existing: bool,
+    batch_size: Option<usize>,
+    from_events: bool,
+) -> Result<()> {
     let manifest_raw = fs::read_to_string(base.join("manifest.json"))
         .context("manifest.json not found – is this an OFFF container?")?;
     let _manifest: ManifestJson =
@@ -374,6 +385,41 @@ fn cmd_objects(base: &Path, skip_existing: bool, batch_size: Option<usize>) -> R
 
     if skip_existing && idx_path.exists() && edges_path.exists() && deriv_path.exists() {
         println!("Indexes already present and --skip-existing set; nothing to do.");
+        return Ok(());
+    }
+
+    // ── Event-log rebuild path ────────────────────────────────────────────
+    if from_events {
+        let events_path = base.join("indexes/objects/object_events.jsonl");
+        if !events_path.exists() {
+            anyhow::bail!(
+                "--from-events requires indexes/objects/object_events.jsonl which was not found"
+            );
+        }
+        let objects =
+            rebuild_object_index_from_events(base).context("event-log replay failed")?;
+        fs::create_dir_all(&out_dir)
+            .with_context(|| format!("failed to create {}", out_dir.display()))?;
+        write_object_index(&idx_path, &objects)
+            .context("failed to write object_index.parquet")?;
+        println!("Container:        {}", base.display());
+        println!("Mode:             event-log replay");
+        println!("Objects indexed:  {}", objects.len());
+        println!("Written:          {}", idx_path.display());
+        let prov_path = base.join("provenance/chain_of_custody.jsonl");
+        let mut prov = ProvenanceWriter::new(&prov_path).context("provenance writer failed")?;
+        prov.record(
+            "rebuilt_object_index_from_events",
+            TOOL_NAME,
+            TOOL_VERSION,
+            "system",
+            serde_json::json!({
+                "container": base.display().to_string(),
+                "objects_indexed": objects.len(),
+                "output": idx_path.display().to_string(),
+            }),
+        )
+        .context("provenance write failed")?;
         return Ok(());
     }
 

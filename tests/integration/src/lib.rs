@@ -475,6 +475,25 @@ fn make_gpt_image(dir: &Path, name: &str) -> PathBuf {
         .collect();
     disk[entry1_off + 56..entry1_off + 56 + data_name.len()].copy_from_slice(&data_name);
 
+    // Compute and write the GPT header CRC32 (bytes 16-19, zeroed during computation)
+    {
+        const POLY: u32 = 0xEDB8_8320;
+        fn crc32_ieee(data: &[u8]) -> u32 {
+            let mut crc: u32 = 0xFFFF_FFFF;
+            for &byte in data {
+                crc ^= byte as u32;
+                for _ in 0..8 {
+                    if crc & 1 != 0 { crc = (crc >> 1) ^ POLY; } else { crc >>= 1; }
+                }
+            }
+            crc ^ 0xFFFF_FFFF
+        }
+        let mut hdr_crc_buf = disk[hdr_off..hdr_off + 92].to_vec();
+        hdr_crc_buf[16] = 0; hdr_crc_buf[17] = 0; hdr_crc_buf[18] = 0; hdr_crc_buf[19] = 0;
+        let crc = crc32_ieee(&hdr_crc_buf);
+        disk[hdr_off + 16..hdr_off + 20].copy_from_slice(&crc.to_le_bytes());
+    }
+
     let path = dir.join(name);
     fs::write(&path, &disk).unwrap();
     path

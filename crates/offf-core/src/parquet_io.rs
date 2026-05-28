@@ -327,6 +327,49 @@ pub fn write_file_index(path: &Path, rows: &[FileIndexRow]) -> Result<(), OfffEr
     Ok(())
 }
 
+/// Read the minimal fields needed for file_id resolution from file_index.parquet.
+///
+/// Returns a vec of `(file_id, chunk_refs_json)` pairs.  The `chunk_refs_json`
+/// field is a JSON array of chunk_id strings (e.g. `["sha256:abc...", ...]`).
+/// Only non-deleted, non-directory rows are returned.
+pub fn read_file_index_for_resolution(path: &Path) -> Result<Vec<(u64, String)>, OfffError> {
+    if !path.exists() {
+        return Ok(vec![]);
+    }
+    let file = fs::File::open(path)?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+    let reader = builder.build()?;
+    let mut rows = Vec::new();
+    for batch in reader {
+        let batch = batch?;
+        if batch.num_rows() == 0 {
+            continue;
+        }
+        let file_id = as_u64_col(&batch, "file_id")?;
+        let chunk_refs = as_str_col(&batch, "chunk_refs")?;
+        // is_directory / is_deleted
+        let is_dir_col = batch.column_by_name("is_directory").and_then(|c| {
+            c.as_any()
+                .downcast_ref::<arrow::array::BooleanArray>()
+                .cloned()
+        });
+        let is_del_col = batch.column_by_name("is_deleted").and_then(|c| {
+            c.as_any()
+                .downcast_ref::<arrow::array::BooleanArray>()
+                .cloned()
+        });
+        for i in 0..batch.num_rows() {
+            let is_dir = is_dir_col.as_ref().map(|c| c.value(i)).unwrap_or(false);
+            let is_del = is_del_col.as_ref().map(|c| c.value(i)).unwrap_or(false);
+            if is_dir || is_del {
+                continue;
+            }
+            rows.push((file_id.value(i), chunk_refs.value(i).to_string()));
+        }
+    }
+    Ok(rows)
+}
+
 // ── keyword_hits.parquet ──────────────────────────────────────────────────────
 
 pub fn write_keyword_hits(path: &Path, rows: &[KeywordHitRow]) -> Result<(), OfffError> {

@@ -8,10 +8,13 @@ use serde::Serialize;
 
 use offf_core::{
     chunk::hex_sha256,
-    parquet_io::{read_physical_to_chunk, read_physical_to_chunk_bytes, write_keyword_hits},
+    parquet_io::{
+        read_file_index_for_resolution, read_physical_to_chunk, read_physical_to_chunk_bytes,
+        write_keyword_hits,
+    },
     provenance::ProvenanceWriter,
     storage::{read_chunk_verified, ContainerRef},
-    types::{JobManifest, KeywordHitRow, ManifestJson, ToolInfo},
+    types::{ChunkMetadata, JobManifest, KeywordHitRow, ManifestJson, ToolInfo},
 };
 
 const TOOL_NAME: &str = "offf-keyword-worker";
@@ -230,11 +233,121 @@ fn main() -> Result<()> {
 
     let mut all_hits = hits.into_inner().unwrap();
     let all_errors = scan_errors.into_inner().unwrap();
+
+    // ── Cross-chunk junction scanning ─────────────────────────────────────
+    // For adjacent chunk pairs create a small junction buffer containing the
+    // tail of chunk A and the head of chunk B, then search it for each pattern.
+    let max_pattern_len = patterns.iter().map(|(_, _, p)| p.len()).max().unwrap_or(0);
+    if max_pattern_len > 1 && scoped_chunks.len() > 1 {
+        // Sort by physical offset so adjacency makes sense.
+        let mut sorted_chunks: Vec<&ChunkMetadata> = scoped_chunks.clone();
+        sorted_chunks.sort_by_key(|c| c.source_offset);
+        for pair in sorted_chunks.windows(2) {
+            let (a_meta, b_meta) = (&pair[0], &pair[1]);
+            // Only scan truly adjacent chunks (no gap).
+            if a_meta.source_offset + a_meta.source_length != b_meta.source_offset {
+                continue;
+            }
+            let overlap = (max_pattern_len - 1).min(a_meta.source_length as usize);
+            let a_data = match container.local_path(&format!("chunks/{}", a_meta.chunk_id)) {
+                Some(p) => {
+                    if let Ok(b) = fs::read(&p) { b } else { continue; }
+                }
+                None => match container.read_bytes(&format!("chunks/{}", a_meta.chunk_id)) {
+                    Ok(b) => b,
+                    Err(_) => continue,
+                },
+            };
+            let b_data = match container.local_path(&format!("chunks/{}", b_meta.chunk_id)) {
+                Some(p) => {
+                    if let Ok(b) = fs::read(&p) { b } else { continue; }
+                }
+                None => match container.read_bytes(&format!("chunks/{}", b_meta.chunk_id)) {
+                    Ok(b) => b,
+                    Err(_) => continue,
+                },
+            };
+            let head_a = &a_data[a_data.len().saturating_sub(overlap)..];
+            let head_b_len = (max_pattern_len - 1).min(b_data.len());
+            let head_b = &b_data[..head_b_len];
+            let mut junc = Vec::with_capacity(head_a.len() + head_b.len());
+            junc.extend_from_slice(head_a);
+            junc.extend_from_slice(head_b);
+                    let junc_start_offset = a_meta.source_offset + a_meta.source_length - head_a.len() as u64;
+
+            for (keyword, encoding, pattern) in &patterns {
+                for rel_off in find_all(&junc, pattern) {
+                    let abs_off = rel_off as u64 + junc_start_offset;
+                    // Skip if the hit starts inside chunk A (already found by per-chunk scan).
+                    if abs_off < a_meta.source_offset + a_meta.source_length {
+                        let ctx_start = rel_off.saturating_sub(CONTEXT_BYTES);
+                        let ctx_end = (rel_off + pattern.len() + CONTEXT_BYTES).min(junc.len());
+                        let context_before =
+                            String::from_utf8_lossy(&junc[ctx_start..rel_off]).into_owned();
+                        let context_after = String::from_utf8_lossy(
+                            &junc[rel_off + pattern.len()..ctx_end],
+                        )
+                        .into_owned();
+                        all_hits.push(KeywordHitRow {
+                            hit_id: String::new(),
+                            job_id: job.job_id.clone(),
+                            keyword: keyword.clone(),
+                            chunk_id: a_meta.chunk_id.clone(),
+                            physical_offset: abs_off,
+                            file_id: String::new(),
+                            context_before,
+                            context_after,
+                            encoding: encoding.clone(),
+                            worker_id: cli.worker_id.clone(),
+                            timestamp: Utc::now().to_rfc3339(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
     // Sort by physical offset for deterministic output
     all_hits.sort_by_key(|h| (h.physical_offset, h.encoding.clone(), h.keyword.clone()));
     // Assign hit IDs
     for (i, hit) in all_hits.iter_mut().enumerate() {
         hit.hit_id = format!("hit-{i:08}");
+    }
+
+    // ── file_id resolution (non-fatal) ────────────────────────────────────
+    // Build a map chunk_id → [file_id] from all file_index.parquet files under
+    // indexes/filesystems/*/file_index.parquet.
+    let chunk_to_file: std::collections::HashMap<String, Vec<u64>> = {
+        let mut map: std::collections::HashMap<String, Vec<u64>> = std::collections::HashMap::new();
+        let fs_glob = container.local_path("indexes/filesystems");
+        if let Some(fs_base) = fs_glob {
+            if let Ok(rd) = fs::read_dir(&fs_base) {
+                for entry in rd.flatten() {
+                    let p = entry.path().join("file_index.parquet");
+                    if let Ok(rows) = read_file_index_for_resolution(&p) {
+                        for (fid, chunk_refs_json) in rows {
+                            if let Ok(chunk_ids) =
+                                serde_json::from_str::<Vec<String>>(&chunk_refs_json)
+                            {
+                                for cid in chunk_ids {
+                                    map.entry(cid).or_default().push(fid);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        map
+    };
+    if !chunk_to_file.is_empty() {
+        for hit in &mut all_hits {
+            if let Some(fids) = chunk_to_file.get(&hit.chunk_id) {
+                if fids.len() == 1 {
+                    hit.file_id = fids[0].to_string();
+                }
+            }
+        }
     }
 
     println!("Hits found: {}", all_hits.len());
