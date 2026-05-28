@@ -77,6 +77,10 @@ enum VerifyProfile {
     #[value(name = "core+extensions")]
     CoreExtensions,
     Conformance,
+    /// Accept v0.1 analysis layouts; emit warnings for missing result_manifest.json
+    /// and non-forensic-grade outputs. Use this to audit containers created by
+    /// pre-v0.2 workers and plan migration to v0.2 output contracts.
+    Legacy,
 }
 
 // ── Verification result ───────────────────────────────────────────────────────
@@ -635,6 +639,10 @@ fn verify(
         run_extension_checks(manifest_value.as_ref(), &container, &mut report);
     }
 
+    if profile == VerifyProfile::Legacy {
+        run_legacy_checks(&container, &mut report);
+    }
+
     if profile == VerifyProfile::Conformance && report_path.is_none() {
         report.warn(
             "Conformance report",
@@ -969,6 +977,147 @@ fn includes_extensions(profile: VerifyProfile) -> bool {
         profile,
         VerifyProfile::CoreExtensions | VerifyProfile::Conformance
     )
+}
+
+// ── Legacy compatibility checks ───────────────────────────────────────────────
+
+/// Inspect the `analysis/` tree for v0.1-style layouts and emit warnings.
+/// This does NOT fail the report — legacy outputs are accepted with caveats.
+fn run_legacy_checks(container: &ContainerRef, report: &mut VerifyReport) {
+    report.ok("Legacy profile: running v0.1 compatibility audit");
+
+    let local_root = match container.local_path("") {
+        Some(p) => p,
+        None => {
+            report.warn(
+                "Legacy checks",
+                "S3 containers do not support legacy layout inspection",
+            );
+            return;
+        }
+    };
+
+    let analysis_dir = local_root.join("analysis");
+    if !analysis_dir.exists() {
+        report.ok("Legacy checks: no analysis/ directory found (no analysis outputs to audit)");
+        return;
+    }
+
+    // ── Check for flat v0.1 direct files in analysis/ (non-job-scoped) ────
+    let flat_files: Vec<String> = match fs::read_dir(&analysis_dir) {
+        Ok(entries) => entries
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_file())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect(),
+        Err(_) => vec![],
+    };
+    if !flat_files.is_empty() {
+        let names = flat_files.join(", ");
+        report.warn(
+            "Legacy layout: flat analysis files",
+            format!(
+                "analysis/ contains flat files ({names}) — v0.1 style, not job-scoped; \
+                 mark as non-forensic-grade and migrate to analysis/jobs/<job_id>/ layout"
+            ),
+        );
+    }
+
+    // ── Check jobs/ subdirectories for missing result_manifest.json ───────
+    let jobs_dir = analysis_dir.join("jobs");
+    if !jobs_dir.exists() {
+        report.ok("Legacy checks: analysis/jobs/ not present (no job-scoped outputs)");
+        return;
+    }
+
+    let job_dirs: Vec<_> = match fs::read_dir(&jobs_dir) {
+        Ok(entries) => entries
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_dir())
+            .collect(),
+        Err(_) => {
+            report.warn("Legacy checks", "could not read analysis/jobs/");
+            return;
+        }
+    };
+
+    if job_dirs.is_empty() {
+        report.ok("Legacy checks: analysis/jobs/ is empty");
+        return;
+    }
+
+    let mut legacy_count = 0usize;
+    let mut compliant_count = 0usize;
+
+    for entry in &job_dirs {
+        let job_id = entry.file_name().to_string_lossy().into_owned();
+        let result_manifest = entry.path().join("result_manifest.json");
+
+        if !result_manifest.exists() {
+            legacy_count += 1;
+            report.warn(
+                format!("Legacy job: {job_id}"),
+                "missing result_manifest.json — non-forensic-grade v0.1 output; \
+                 migrate to v0.2 output contract to attain forensic-grade status",
+            );
+        } else {
+            // Check for v0.2 required fields in result_manifest.json
+            match fs::read_to_string(&result_manifest) {
+                Ok(raw) => {
+                    let v: serde_json::Value =
+                        serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+                    let has_job_id = v.get("job_id").and_then(|x| x.as_str()).is_some();
+                    let has_status = v.get("status").and_then(|x| x.as_str()).is_some();
+                    let has_tool = v.get("tool").is_some();
+                    if has_job_id && has_status && has_tool {
+                        compliant_count += 1;
+                    } else {
+                        legacy_count += 1;
+                        let missing: Vec<&str> = [
+                            (!has_job_id).then_some("job_id"),
+                            (!has_status).then_some("status"),
+                            (!has_tool).then_some("tool"),
+                        ]
+                        .into_iter()
+                        .flatten()
+                        .collect();
+                        report.warn(
+                            format!("Legacy job: {job_id}"),
+                            format!(
+                                "result_manifest.json missing fields: {} — \
+                                 non-conformant with v0.2 output contract",
+                                missing.join(", ")
+                            ),
+                        );
+                    }
+                }
+                Err(e) => {
+                    legacy_count += 1;
+                    report.warn(
+                        format!("Legacy job: {job_id}"),
+                        format!("could not read result_manifest.json: {e}"),
+                    );
+                }
+            }
+        }
+    }
+
+    if legacy_count > 0 {
+        report.warn(
+            "Legacy migration guidance",
+            format!(
+                "{legacy_count} job(s) require migration to v0.2 output contract. \
+                 Steps: (1) re-run with offf-keyword-worker / offf-yara-worker >= 0.2.0; \
+                 (2) ensure result_manifest.json is written; \
+                 (3) update scope field in job manifest to use scope_ref if applicable."
+            ),
+        );
+    }
+    if compliant_count > 0 {
+        report.ok(format!(
+            "Legacy checks: {compliant_count} job(s) already v0.2-compliant"
+        ));
+    }
 }
 
 fn run_provenance_schema_checks(content: &str, report: &mut VerifyReport) {

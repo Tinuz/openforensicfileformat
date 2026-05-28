@@ -3081,6 +3081,7 @@ dependencies = [
  "chrono",
  "clap",
  "offf-core",
+ "serde",
  "serde_json",
 ]
 

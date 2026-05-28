@@ -46,6 +46,15 @@ enum Command {
         /// Chunks to scan: "all" or comma-separated "sha256:…" IDs
         #[arg(long, default_value = "all")]
         chunks: String,
+        /// Reference to a ScopeRecord ID in extensions/scopes/scopes.jsonl
+        #[arg(long)]
+        scope_ref: Option<String>,
+        /// Set IDs to restrict processing to (repeatable: --include-set ws-001 --include-set ws-002)
+        #[arg(long, value_name = "SET_ID")]
+        include_set: Vec<String>,
+        /// External policy references (repeatable)
+        #[arg(long, value_name = "POLICY_REF")]
+        policy_ref: Vec<String>,
         /// Output path for the job manifest JSON
         #[arg(long, short)]
         output: PathBuf,
@@ -61,6 +70,15 @@ enum Command {
         /// Chunks to scan: "all" or comma-separated "sha256:…" IDs
         #[arg(long, default_value = "all")]
         chunks: String,
+        /// Reference to a ScopeRecord ID in extensions/scopes/scopes.jsonl
+        #[arg(long)]
+        scope_ref: Option<String>,
+        /// Set IDs to restrict processing to (repeatable: --include-set ws-001 --include-set ws-002)
+        #[arg(long, value_name = "SET_ID")]
+        include_set: Vec<String>,
+        /// External policy references (repeatable)
+        #[arg(long, value_name = "POLICY_REF")]
+        policy_ref: Vec<String>,
         /// Output path for the job manifest JSON
         #[arg(long, short)]
         output: PathBuf,
@@ -79,7 +97,7 @@ enum Command {
         /// Tool version
         #[arg(long, default_value = "0.1.0")]
         tool_version: String,
-        /// Chunks to scan: "all" or comma-separated "sha256:\u2026" IDs
+        /// Chunks to scan: "all" or comma-separated "sha256:…" IDs
         #[arg(long, default_value = "all")]
         chunks: String,
         /// Allow this job to discover objects
@@ -94,6 +112,15 @@ enum Command {
         /// Allow this job to materialize objects
         #[arg(long, default_value_t = false)]
         may_materialize_objects: bool,
+        /// Reference to a ScopeRecord ID in extensions/scopes/scopes.jsonl
+        #[arg(long)]
+        scope_ref: Option<String>,
+        /// Set IDs to restrict processing to (repeatable)
+        #[arg(long, value_name = "SET_ID")]
+        include_set: Vec<String>,
+        /// External policy references (repeatable)
+        #[arg(long, value_name = "POLICY_REF")]
+        policy_ref: Vec<String>,
         /// Output path for the job manifest JSON
         #[arg(long, short)]
         output: PathBuf,
@@ -133,14 +160,20 @@ fn main() -> Result<()> {
             keywords,
             encoding,
             chunks,
+            scope_ref,
+            include_set,
+            policy_ref,
             output,
-        } => cmd_create_keyword(&case, &keywords, &encoding, &chunks, &output),
+        } => cmd_create_keyword(&case, &keywords, &encoding, &chunks, scope_ref, include_set, policy_ref, &output),
         Command::CreateYara {
             case,
             rules,
             chunks,
+            scope_ref,
+            include_set,
+            policy_ref,
             output,
-        } => cmd_create_yara(&case, &rules, &chunks, &output),
+        } => cmd_create_yara(&case, &rules, &chunks, scope_ref, include_set, policy_ref, &output),
         Command::List { container } => cmd_list(&container),
         Command::Run {
             case,
@@ -159,6 +192,9 @@ fn main() -> Result<()> {
             may_produce_edges,
             may_produce_derivations,
             may_materialize_objects,
+            scope_ref,
+            include_set,
+            policy_ref,
             output,
         } => cmd_create_object_worker(
             &case,
@@ -170,6 +206,9 @@ fn main() -> Result<()> {
             may_produce_edges,
             may_produce_derivations,
             may_materialize_objects,
+            scope_ref,
+            include_set,
+            policy_ref,
             &output,
         ),
     }
@@ -233,6 +272,9 @@ fn cmd_create_object_worker(
     may_produce_edges: bool,
     may_produce_derivations: bool,
     may_materialize_objects: bool,
+    scope_ref: Option<String>,
+    include_sets: Vec<String>,
+    policy_refs: Vec<String>,
     output: &Path,
 ) -> Result<()> {
     let (case_id, chunk_ids) = resolve_case(case, chunks_arg)?;
@@ -256,6 +298,9 @@ fn cmd_create_object_worker(
             may_produce_derivations,
             may_materialize_objects,
         }),
+        scope_ref,
+        include_sets,
+        policy_refs,
         parameters: serde_json::Value::Object(serde_json::Map::new()),
     };
 
@@ -275,6 +320,9 @@ fn cmd_create_keyword(
     keywords_csv: &str,
     encoding_csv: &str,
     chunks_arg: &str,
+    scope_ref: Option<String>,
+    include_sets: Vec<String>,
+    policy_refs: Vec<String>,
     output: &Path,
 ) -> Result<()> {
     let (case_id, chunk_ids) = resolve_case(case, chunks_arg)?;
@@ -303,6 +351,9 @@ fn cmd_create_keyword(
         },
         input_scope: None,
         output_contract: None,
+        scope_ref,
+        include_sets,
+        policy_refs,
         parameters: serde_json::json!({
             "keywords": keywords,
             "encoding": encodings,
@@ -323,7 +374,15 @@ fn cmd_create_keyword(
 
 // ── offf-jobs create-yara ─────────────────────────────────────────────────────
 
-fn cmd_create_yara(case: &Path, rules_path: &Path, chunks_arg: &str, output: &Path) -> Result<()> {
+fn cmd_create_yara(
+    case: &Path,
+    rules_path: &Path,
+    chunks_arg: &str,
+    scope_ref: Option<String>,
+    include_sets: Vec<String>,
+    policy_refs: Vec<String>,
+    output: &Path,
+) -> Result<()> {
     let (case_id, chunk_ids) = resolve_case(case, chunks_arg)?;
 
     // Read and hash the rules file (strip UTF-8 BOM if present)
@@ -351,6 +410,9 @@ fn cmd_create_yara(case: &Path, rules_path: &Path, chunks_arg: &str, output: &Pa
         },
         input_scope: None,
         output_contract: None,
+        scope_ref,
+        include_sets,
+        policy_refs,
         parameters: serde_json::json!({
             "rules_path": rules_path.display().to_string(),
             "rules_hash": format!("sha256:{rules_hash}"),
@@ -720,6 +782,9 @@ mod tests {
             },
             input_scope: None,
             output_contract: None,
+            scope_ref: None,
+            include_sets: vec![],
+            policy_refs: vec![],
             parameters: serde_json::json!({"k": ["x"]}),
         };
         let raw = serde_json::to_string(&job).unwrap();

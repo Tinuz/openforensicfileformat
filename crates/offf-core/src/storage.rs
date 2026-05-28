@@ -494,7 +494,8 @@ pub fn read_derived_object_streaming(
                 hasher.update(&buf[..n]);
                 on_chunk(&buf[..n]);
             }
-            let actual = hex::encode(hasher.finalize());
+            let digest = hasher.finalize();
+            let actual = format!("{digest:x}");
             if actual != expected {
                 return Err(OfffError::HashMismatch {
                     chunk_id: rel,

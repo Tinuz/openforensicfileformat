@@ -295,7 +295,7 @@ fn main() -> Result<()> {
             container_id: manifest.container_id,
             source_sha256: manifest.hashes.source_sha256,
             merkle_root_sha256: manifest.hashes.merkle_root_sha256,
-            scope_ref: None,
+            scope_ref: job.scope_ref.clone(),
             chunk_count: scoped_chunks.len(),
         },
         outputs: ResultManifestOutputs {
@@ -336,6 +336,30 @@ fn main() -> Result<()> {
             "result_manifest": rel_result_manifest,
         }),
     )?;
+
+    // ── Scope-evaluated audit event ───────────────────────────────────────
+    if job.scope_ref.is_some() || !job.include_sets.is_empty() || !job.policy_refs.is_empty() {
+        let audit_event = serde_json::json!({
+            "event_id": format!("scope-eval-{}", job.job_id),
+            "timestamp": Utc::now().to_rfc3339(),
+            "actor": cli.worker_id,
+            "action": "scope_evaluated",
+            "target": {
+                "kind": "job",
+                "id": job.job_id
+            },
+            "detail": {
+                "scope_ref": job.scope_ref,
+                "include_sets": job.include_sets,
+                "policy_refs": job.policy_refs,
+                "chunks_in_scope": scoped_chunks.len(),
+                "tool": TOOL_NAME,
+            }
+        });
+        let line = serde_json::to_string(&audit_event)?;
+        // Non-fatal: audit write failure does not abort the job.
+        let _ = container.append_jsonl_line("extensions/audit/audit_events.jsonl", &line);
+    }
 
     Ok(())
 }

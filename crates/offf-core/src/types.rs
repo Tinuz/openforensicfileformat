@@ -76,6 +76,11 @@ pub struct FileIndexRow {
     pub chunk_refs: String,
     pub is_directory: bool,
     pub is_deleted: bool,
+    pub is_sparse: bool,
+    pub is_compressed: bool,
+    pub is_encrypted: bool,
+    /// JSON array of alternate data stream names
+    pub ads_streams: String,
     pub parser: String,
     pub parser_version: String,
     /// "ok" | "partial" | "error"
@@ -102,6 +107,18 @@ pub struct JobManifest {
     pub input_scope: Option<JobInputScope>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_contract: Option<JobOutputContract>,
+    /// Reference to a `ScopeRecord` in `extensions/scopes/scopes.jsonl`.
+    /// Workers must resolve this scope and enforce include/exclude rules.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope_ref: Option<String>,
+    /// Set IDs from `extensions/sets/` to restrict processing to.
+    /// Only objects that are members of at least one listed set are processed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub include_sets: Vec<String>,
+    /// External policy references (e.g. "policy:external:scope-001").
+    /// Recorded for audit purposes; workers enforce via scope/set membership.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub policy_refs: Vec<String>,
     /// Task-specific parameters (see per-task docs).
     pub parameters: serde_json::Value,
 }

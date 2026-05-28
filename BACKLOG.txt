@@ -247,15 +247,24 @@ P1 - Daarna
   - Added: 2026-05-27
   - Status: done
 
-- [ ] Object graph read/query APIs (P1)
+- [x] Object graph read/query APIs (P1) ✅ 2026-05-28 [Sprint 18]
   - Add list/get/children/parents/lineage endpoints and SDK wrappers
   - Add graph pagination/filtering for large cases
   - Add machine-readable lineage report export
+  - Status: done
+  - Progress: Python SDK `api.py` — `get_object`, `list_objects` (with limit/offset/type/parent filters),
+    `get_object_children` (edge + parent-pointer), `get_object_parents`, `get_object_lineage_path`
+    (root-to-leaf with cycle guard), `export_lineage_report` (full JSON with tree summary).
+    All exported from `offf_sdk.__init__`.
 
-- [ ] Legacy compatibility profile for analysis outputs (P1)
+- [x] Legacy compatibility profile for analysis outputs (P1) ✅ 2026-05-28 [Sprint 17]
   - Keep v0.1 result layouts readable with verifier warnings
   - Mark legacy workers/results as non-forensic-grade where required
   - Provide migration guidance for v0.2 output contract adoption
+  - Status: done
+  - Progress: `offf-verify --profile legacy` — new `VerifyProfile::Legacy` variant. Checks flat
+    `analysis/` files (v0.1 style), scans `analysis/jobs/*/result_manifest.json` for missing
+    required fields, emits WARN for each non-forensic-grade job, and prints migration guidance.
 
 - [x] Generic extension types + append-only APIs (P1) ✅ 2026-05-27 [Sprint 15]
   - Add core structs and schemas: labels, scopes, sets, decisions, policy refs, access/denied/audit events
@@ -271,9 +280,16 @@ P1 - Daarna
     en corresponderende `list_*`/`get_*` read-helpers.
     Access Service REST/gRPC endpoints voor extension write-pad volgen in Sprint 16.
 
-- [ ] Scope-aware jobs and workers (P1)
+- [x] Scope-aware jobs and workers (P1) ✅ 2026-05-28 [Sprint 16]
   - Extend `JobManifest` with `scope_ref`, `include_sets`, `exclude_sets`, `exclude_labels`
   - Enforce effective scope in workers and emit audit events for skipped items
+  - Status: done
+  - Progress: `offf-core::types::JobManifest` extended with `scope_ref: Option<String>`,
+    `include_sets: Vec<String>`, `policy_refs: Vec<String>`. `offf-keyword-worker` and
+    `offf-yara-worker` propagate `scope_ref` to `result_manifest.json` and emit a
+    `scope_evaluated` audit event to `extensions/audit/audit_events.jsonl` when scope fields
+    are set. `offf-jobs create-keyword/create-yara/create-object-worker` gain
+    `--scope-ref`, `--include-set`, `--policy-ref` flags.
 
 - [ ] Object-per-event append model for object storage (P1)
   - Replace JSONL read-modify-write patterns with immutable event objects

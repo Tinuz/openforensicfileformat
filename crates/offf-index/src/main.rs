@@ -723,5 +723,4 @@ fn csv_escape(s: &str) -> String {
 
 // Bring streaming helpers into scope (re-exported from offf_core via pub use,
 // but we need the un-prefixed names used above).
-use offf_core::parquet_io::{for_each_derivation_batch, for_each_edge_batch, for_each_object_batch};
 use std::io::Write;

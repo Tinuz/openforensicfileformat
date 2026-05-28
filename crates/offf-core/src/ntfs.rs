@@ -757,6 +757,10 @@ pub fn index_ntfs(
             chunk_refs: chunk_refs_json,
             is_directory,
             is_deleted,
+            is_sparse: false,       // sparse flag from $STANDARD_INFORMATION not yet parsed
+            is_compressed: false,   // compressed flag from $STANDARD_INFORMATION not yet parsed
+            is_encrypted: false,    // encrypted flag from $STANDARD_INFORMATION not yet parsed
+            ads_streams: "[]".to_string(),
             parser: tool_name.to_string(),
             parser_version: TOOL_VERSION.to_string(),
             parser_status,
