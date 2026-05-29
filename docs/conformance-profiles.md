@@ -225,6 +225,97 @@ at `tests/conformance/run_conformance.py` reports pass/fail per profile.
 
 ---
 
+### OFFF Forensic Baseline Conformant
+
+**Scope:** A container or tool that meets the minimum requirements for use in a formal forensic context.
+This profile aggregates mandatory checks from Reader, Acquisition, and Analysis Worker profiles
+into a single baseline that every forensic-use container must pass.
+
+**Required functions:**
+- Produce or verify a container that satisfies all checks in `docs/forensic-baseline-profile.md`.
+- Support `offf-verify --profile forensic-baseline` invocation.
+- Produce a machine-readable verification report (JSON) and a human-readable report (Markdown)
+  via `--report-json` and `--report-md` flags.
+
+**Required schemas:**
+- `offf-manifest-0.1.0.schema.json` or `offf-manifest-0.2.0.schema.json`
+- `offf-acquisition-0.1.0.schema.json`
+- `offf-provenance-event-0.1.0.schema.json`
+
+**Required checks (pass/fail):**
+
+| Check ID | Description | Severity |
+|---|---|---|
+| BL-01 | `manifest.json` present, parseable, schema-valid | FAIL |
+| BL-02 | `acquisition.json` present, parseable, schema-valid | FAIL |
+| BL-03 | `acquisition_mode` present and is a known value | FAIL |
+| BL-04 | Evidence root identifiable from `acquisition.json` | FAIL |
+| BL-05 | Evidence layer not modified after finalization | FAIL |
+| BL-06 | All chunk SHA-256 hashes match stored hashes | FAIL |
+| BL-07 | Merkle root in manifest matches computed root | FAIL (block_image only) |
+| BL-08 | Object index present and parseable | FAIL (file_collection / derived objects) |
+| BL-09 | No dangling lineage references | FAIL (when derivations present) |
+| BL-10 | No evidence layer mutations from analysis jobs | FAIL |
+| BL-11 | All result manifest artifact hashes correct | FAIL (when jobs present) |
+| BL-12 | At least one acquisition provenance event | FAIL |
+| BL-13 | Skipped/error/denied events are parseable | FAIL (when events declared) |
+| BL-14 | No undocumented deviations from required elements | FAIL |
+
+**Required negative tests:**
+- Tampered chunk → verifier reports FAIL with check BL-06.
+- Missing `acquisition.json` → verifier reports FAIL with check BL-02.
+- Evidence layer file modified after `manifest.json` was written → BL-05 FAIL.
+- Corrupted `result_manifest.json` hash → BL-11 FAIL.
+
+**Pass/fail criteria:**
+- **Pass:** All applicable BL-0x checks result in PASS.
+- **Not-applicable:** A check is not-applicable if its precondition is not met (e.g., BL-07
+  is not-applicable when `acquisition_mode` is not `block_image`).
+- **Fail:** Any applicable BL-0x check results in FAIL.
+
+**Report format:**
+
+```json
+{
+  "profile": "OFFF Forensic Baseline Conformant",
+  "container": "<path>",
+  "verified_at": "2026-05-29T00:00:00Z",
+  "verifier_version": "0.1.0",
+  "status": "pass | fail",
+  "checks": [
+    { "id": "BL-01", "description": "manifest.json present and schema-valid", "status": "pass" },
+    { "id": "BL-07", "description": "Merkle root matches computed root", "status": "not-applicable" }
+  ],
+  "failed_checks": [],
+  "warnings": [],
+  "limitations": [],
+  "recommended_next_action": "Container meets forensic baseline requirements. Proceed to expert review."
+}
+```
+
+**How to run:**
+
+```bash
+cargo run -p offf-verify -- <container.offf> \
+  --profile forensic-baseline \
+  --report-json baseline-report.json \
+  --report-md  baseline-report.md
+```
+
+**Exit codes:**
+- `0` — all applicable checks pass.
+- `1` — one or more checks fail.
+
+**Optional:**
+- `--object <id> --lineage` for per-object lineage trace.
+- Integration with `scripts/generate_release_readiness.py` for container-level readiness score.
+
+**Related:**
+- `docs/forensic-baseline-profile.md` — full baseline specification with rationale per check.
+- `docs/forensic-limitations.md` — known limitations even when baseline is met.
+
+---
+
 ## Conformance Report Format
 
 The conformance suite writes `tests/conformance/conformance-report.json` with the following structure:

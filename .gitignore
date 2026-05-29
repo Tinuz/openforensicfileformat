@@ -18,6 +18,11 @@ Thumbs.db
 
 # Demo environment (lives in offf-demo repo)
 scripts/
+!scripts/check_component_metadata.py
+!scripts/check_test_traceability.py
+!scripts/generate_release_readiness.py
+!scripts/check_evidence_of_done.py
+!scripts/normalize_backlog.py
 workers/
 docker-compose.yml
 demo-data/

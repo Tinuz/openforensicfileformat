@@ -14,6 +14,14 @@ P0 - Direct oppakken
   - Added: 2026-05-23
   - Status: done
   - Done: 2026-05-23
+  - Classification: core
+  - Maturity: forensic-grade-candidate
+  - Implemented in:
+      - README.md
+      - docs/status.md
+  - Tests: manual verification
+  - Conformance: OFFF Core Conformant
+  - Known limitations: none
   - Progress: root `README.md` toegevoegd met quickstart/build/examples + referenties; `docs/status.md` toegevoegd en gelinkt vanuit root README
   - Acceptance:
     - Root README exists and contains quickstart and architecture overview
@@ -36,6 +44,12 @@ P0 - Direct oppakken
   - Added: 2026-05-23
   - Status: done
   - Done: 2026-05-23
+  - Classification: core
+  - Maturity: forensic-grade-candidate
+  - Implemented in: crates/offf-core/src/chunk.rs
+  - Tests: test_write_chunk_reuse_valid_existing, test_write_chunk_corrupt_existing_fails
+  - Conformance: OFFF Core Conformant
+  - Known limitations: none
   - Progress: `write_chunk` valideert nu bestaande chunkbestanden cryptografisch voordat dedup skip plaatsvindt; tests toegevoegd voor hergebruik van valide bestaande chunk en fail-fast bij corrupte bestaande chunk
 
 - [x] Hardening Sprint 3: true deterministic mode + sector-size parameter (P0)
@@ -45,6 +59,14 @@ P0 - Direct oppakken
   - Added: 2026-05-23
   - Status: done
   - Done: 2026-05-23
+  - Classification: core
+  - Maturity: forensic-grade-candidate
+  - Implemented in:
+      - crates/offf-convert/src/main.rs
+      - crates/offf-core/src/types.rs
+  - Tests: test_deterministic_mode_produces_stable_manifest, test_sector_size_persisted
+  - Conformance: OFFF Core Conformant
+  - Known limitations: none
   - Progress: `offf-convert` ondersteunt nu `--sector-size`; `manifest.source.sector_size` en `acquisition.parameters.sector_size` gebruiken deze waarde; deterministic mode gebruikt vaste timestamp (`1970-01-01T00:00:00Z`) en stabiele provenance output zodat repeated deterministic runs byte-equivalente `manifest.json`, `acquisition.json` en provenance opleveren
 
 - [x] Hardening Sprint 4: Merkle proofs + full tree validation (P0)
@@ -54,6 +76,14 @@ P0 - Direct oppakken
   - Added: 2026-05-23
   - Status: done
   - Done: 2026-05-23
+  - Classification: core
+  - Maturity: forensic-grade-candidate
+  - Implemented in:
+      - crates/offf-core/src/hash.rs
+      - crates/offf-verify/src/main.rs
+  - Tests: test_merkle_round_trip, test_merkle_proof_valid, test_merkle_proof_invalid
+  - Conformance: OFFF Core Conformant
+  - Known limitations: none
   - Progress: `offf-core::hash` bevat nu `generate_merkle_proof`, `verify_merkle_proof` en volledige `merkle_tree.bin` structuurvalidatie met level/internal-node checks; `offf-verify` gebruikt deze validatie, vergelijkt leaves met `physical_to_chunk` volgorde, en ondersteunt `--proof-chunk` voor proof generatie + verificatie
 
 - [x] Hardening Sprint 5: verifier profiles + leaves consistency (P0)
@@ -64,6 +94,12 @@ P0 - Direct oppakken
   - Added: 2026-05-23
   - Status: done
   - Done: 2026-05-23
+  - Classification: core
+  - Maturity: forensic-grade-candidate
+  - Implemented in: crates/offf-verify/src/main.rs
+  - Tests: test_verify_profiles, test_leaves_consistency
+  - Conformance: OFFF Core Conformant, OFFF Conformance Profile Conformant
+  - Known limitations: none
   - Progress: `offf-verify` ondersteunt nu `--profile` + `--report`; conformance-profiel schrijft machine-readable JSON rapport; `leaves.parquet` wordt sequence/hash-gewijs vergeleken met `physical_to_chunk`; provenance checks valideren JSON parsebaarheid, verplichte velden, unieke `event_id` en monotone `evt-` ordering
 
 - [x] Hardening Sprint 6: append-only analysis model (P0)
@@ -73,6 +109,15 @@ P0 - Direct oppakken
   - Added: 2026-05-24
   - Status: done
   - Done: 2026-05-24
+  - Classification: core
+  - Maturity: forensic-grade-candidate
+  - Implemented in:
+      - crates/offf-keyword-worker/src/main.rs
+      - crates/offf-yara-worker/src/main.rs
+      - crates/offf-access-service/src/main.rs
+  - Tests: test_keyword_worker_writes_result_manifest, test_yara_worker_writes_result_manifest
+  - Conformance: OFFF Analysis Worker Conformant
+  - Known limitations: none
   - Progress: `offf-keyword-worker` en `offf-yara-worker` schrijven nu naar `analysis/jobs/{job_id}/...`, weigeren overschrijven van bestaande job-artifacts, en schrijven per job een `result_manifest.json` met SHA-256 van outputbestanden; provenance verwijst naar output + result manifest. `offf-access-service` ondersteunt append-only correction events via REST (`/analysis-corrections`) en gRPC (`AppendAnalysisCorrection`) naar `analysis/events/analysis_events.jsonl`
 
 - [x] Hardening Sprint 7: Access Service production auth + denied audit (P0)
@@ -83,6 +128,12 @@ P0 - Direct oppakken
   - Added: 2026-05-24
   - Status: done
   - Done: 2026-05-24
+  - Classification: core
+  - Maturity: forensic-grade-candidate
+  - Implemented in: crates/offf-access-service/src/main.rs
+  - Tests: grpc_smoke (denied overwrite logging verified)
+  - Conformance: OFFF Access Service Conformant
+  - Known limitations: JWT not independently security-reviewed; mTLS path not integration-tested
   - Progress: `offf-access-service` ondersteunt nu `OFFF_AUTH_MODE` met mode-specifieke trusted identity headers/metadata (`dev_headers`, `jwt`, `mtls`), logt denied write attempts append-only naar `extensions/access/denied_access_events.jsonl`, en hardent write targets naar `analysis/jobs/{job_id}/...` met traversal- en overwrite-blokkering. gRPC smoke-tests zijn bijgewerkt en valideren denied overwrite logging
 
 - [x] Hardening Sprint 8: CI + CLI E2E + negative conformance datasets (P0)
@@ -93,6 +144,14 @@ P0 - Direct oppakken
   - Added: 2026-05-24
   - Status: done
   - Done: 2026-05-24
+  - Classification: core
+  - Maturity: forensic-grade-candidate
+  - Implemented in:
+      - .github/workflows/offf-ci.yml
+      - tests/e2e/run_cli_e2e.py
+  - Tests: CI: rust-quality-gates, cli-e2e, schema-validation, conformance-scaffold
+  - Conformance: OFFF Conformance Profile Conformant
+  - Known limitations: none
   - Progress: `.github/workflows/offf-ci.yml` bevat nu harde quality gates (`fmt`, strikte `clippy`, volledige workspace tests en release build), plus aparte jobs voor conformance en lokale CLI E2E met artifact upload van JSON-rapporten. `tests/e2e/run_cli_e2e.py` voegt een lokale convert->verify->keyword->yara keten toe met machine-readable output (`tests/e2e/cli-e2e-report.json`). Conformance negatieve scenario's zijn dataset-gedreven gemaakt via `tests/conformance/negative_cases.json` en worden machine-readable gerapporteerd
 
 - [x] Lineage Sprint 9: object lineage core model + schemas (P0) ✅ 2026-05-25
@@ -115,6 +174,16 @@ P0 - Direct oppakken
   - Add lineage validator primitives (`ObjectLineageValidator`) for referential integrity checks
   - Added: 2026-05-24
   - Status: done
+  - Classification: core
+  - Maturity: forensic-grade-candidate
+  - Implemented in:
+      - crates/offf-core/src/types.rs
+      - crates/offf-core/src/parquet_io.rs
+      - crates/offf-core/src/lineage.rs
+      - docs/schema/
+  - Tests: test_object_index_round_trip, test_lineage_validator_referential_integrity
+  - Conformance: OFFF Lineage Conformant
+  - Known limitations: none
   - Progress: `offf-core` bevat nu generieke object-lineage modellen (`DiscoveredObjectRow`, `ObjectEdgeRow`, `DerivationRow`, `ObjectSourceRef`, `ObjectStorageRef`), Parquet read/write helpers voor `indexes/objects/*`, en validator-primitieven via `ObjectLineageValidator` (referential checks + cycle detectie). `JobManifest` is v0.2-voorbereid met optionele `input_scope` en `output_contract` zonder v0.1-compat te breken. In `docs/schema` zijn de gevraagde 0.2.0 lineage/object-producing schema’s toegevoegd plus een 0.2 catalog.
   - Acceptance:
     - `object_index`, `object_edges`, `derivations` schema-validated and loadable
@@ -135,6 +204,16 @@ P0 - Direct oppakken
   - Added: 2026-05-24
   - Status: done
   - Done: 2026-05-25
+  - Classification: core
+  - Maturity: forensic-grade-candidate
+  - Implemented in:
+      - crates/offf-core/src/storage.rs
+      - crates/offf-keyword-worker/src/main.rs
+      - crates/offf-yara-worker/src/main.rs
+      - crates/offf-jobs/src/main.rs
+  - Tests: test_derived_object_store_write_verify, test_result_manifest_v2_complete
+  - Conformance: OFFF Analysis Worker Conformant
+  - Known limitations: none
   - Progress: `offf-core::storage` bevat nu `derived_object_path`, `write_derived_object` (hash-verify op reuse) en `read_derived_object`; `offf-keyword-worker` en `offf-yara-worker` gebruiken v0.2 result manifest met `status`, `statistics`, `errors.jsonl` collectie via error-tolerante scan (for_each/match ipv try_for_each); `offf-jobs` ondersteunt nu `create-object-worker` subcommand met volledige `output_contract` vlaggen
   - Acceptance:
     - workers can produce results-only or object-producing outputs via one contract
@@ -156,6 +235,15 @@ P0 - Direct oppakken
   - Enforce capability vs `output_contract` checks at write time
   - Added: 2026-05-24
   - Status: done
+  - Classification: core
+  - Maturity: forensic-grade-candidate
+  - Implemented in:
+      - crates/offf-access-service/src/main.rs
+      - crates/offf-access-service/proto/offf_access.proto
+      - sdk/python/offf_sdk/
+  - Tests: grpc_smoke (object-producing job mock)
+  - Conformance: OFFF Access Service Conformant, OFFF Lineage Conformant
+  - Known limitations: none
   - Progress: completed 2026-05-26
   - Acceptance:
     - writes to `indexes/objects/*` directly are denied
@@ -165,6 +253,14 @@ P0 - Direct oppakken
 - [x] Lineage Sprint 12: deterministic object-index rebuild + lineage verify CLI (P0) ✅ 2026-05-26
   - Added: 2026-05-24
   - Status: done
+  - Classification: core
+  - Maturity: forensic-grade-candidate
+  - Implemented in:
+      - crates/offf-index/src/main.rs
+      - crates/offf-verify/src/main.rs
+  - Tests: test_object_index_rebuild_deterministic, test_lineage_verify_valid, test_lineage_verify_invalid
+  - Conformance: OFFF Lineage Conformant, OFFF Conformance Profile Conformant
+  - Known limitations: none
   - Progress: completed 2026-05-26
   - Add `offf-index objects <case>` rebuild from job deltas:
     - read all job deltas
@@ -245,12 +341,24 @@ P1 - Daarna
   - Add tamper-scenario flow on a copied case to prove pre/post verification behavior
   - Added: 2026-05-27
   - Status: done
+  - Classification: demo
+  - Maturity: demo-only
+  - Implemented in: crates/offf-convert/src/main.rs (demo commands via offf-verify/offf-jobs)
+  - Tests: smoke scripts; demo case integration
+  - Conformance: none (demo-only)
+  - Known limitations: demo-only; not suitable for production use
 
 - [x] Object graph read/query APIs (P1) ✅ 2026-05-28 [Sprint 18]
   - Add list/get/children/parents/lineage endpoints and SDK wrappers
   - Add graph pagination/filtering for large cases
   - Add machine-readable lineage report export
   - Status: done
+  - Classification: reference
+  - Maturity: experimental
+  - Implemented in: sdk/python/offf_sdk/api.py
+  - Tests: Python SDK contract tests
+  - Conformance: OFFF SDK Conformant
+  - Known limitations: Python SDK only; no Rust API parity; pagination experimental
   - Progress: Python SDK `api.py` — `get_object`, `list_objects` (with limit/offset/type/parent filters),
     `get_object_children` (edge + parent-pointer), `get_object_parents`, `get_object_lineage_path`
     (root-to-leaf with cycle guard), `export_lineage_report` (full JSON with tree summary).
@@ -261,6 +369,12 @@ P1 - Daarna
   - Mark legacy workers/results as non-forensic-grade where required
   - Provide migration guidance for v0.2 output contract adoption
   - Status: done
+  - Classification: reference
+  - Maturity: reference
+  - Implemented in: crates/offf-verify/src/main.rs (VerifyProfile::Legacy)
+  - Tests: test_legacy_profile_warns_non_forensic_grade
+  - Conformance: OFFF Legacy Profile Conformant
+  - Known limitations: legacy mode emits warnings only; does not block non-forensic-grade outputs
   - Progress: `offf-verify --profile legacy` — new `VerifyProfile::Legacy` variant. Checks flat
     `analysis/` files (v0.1 style), scans `analysis/jobs/*/result_manifest.json` for missing
     required fields, emits WARN for each non-forensic-grade job, and prints migration guidance.
@@ -325,6 +439,8 @@ P2 - Later
   - implemented-in: docs/threat-model.md
   - tests: gap (documentation artifact — no automated test)
   - Done: 2026-05-29
+  - Conformance: none
+  - Known limitations: gap: no automated test; manual review required
 
 - [x] Versioning policy and migration path (P2) ✅ 2026-05-29
   - Add `docs/versioning.md`
@@ -335,6 +451,8 @@ P2 - Later
   - implemented-in: docs/versioning.md
   - tests: manifest_v010_json_loadable_by_v020_reader, manifest_v020_round_trip_with_extensions
   - Done: 2026-05-29
+  - Conformance: OFFF Core Conformant
+  - Known limitations: offf-migrate CLI not yet implemented
 
 - [x] NTFS forensic depth improvements (P2) ✅ 2026-05-28 (completed 2026-05-29)
   - ATTRIBUTE_LIST support: resident + non-resident resolution; merges ADS/file_names from extension records
@@ -350,6 +468,14 @@ P2 - Later
   - Added: 2026-05-23
   - Status: done
   - Done: 2026-05-23
+  - Classification: reference
+  - Maturity: experimental
+  - Implemented in:
+      - crates/offf-core/src/packed.rs
+      - crates/offf-export/src/main.rs
+  - Tests: packed unit tests in cargo test -p offf-core
+  - Conformance: none (supplementary format)
+  - Known limitations: single-file format not canonical; exploded directory model is canonical
   - Progress: `offf-core::packed` toegevoegd met `pack_directory`, `read_index`, `unpack_to_directory` + tests; `offf-export` uitgebreid met `pack`, `list`, `unpack`, `export`
 
 - [x] Phase 5: MinIO end-to-end smoke test
@@ -465,6 +591,14 @@ P2 - Later
   - Added: 2026-05-22
   - Status: done
   - Done: 2026-05-23
+  - Classification: reference
+  - Maturity: experimental
+  - Implemented in:
+      - sdk/go/sdk.go
+      - sdk/go/sdk_test.go
+  - Tests: sdk/go/sdk_test.go; CI job go-sdk-smoke
+  - Conformance: OFFF SDK Conformant
+  - Known limitations: API surface may change before v1.0; write paths not verified against Rust in CI
   - Progress: `sdk/go` toegevoegd met minimale API (`OpenContainer`, `ReadManifest`, `VerifyContainer`, `ReadChunk`, `VerifyChunk`, `MapOffsetToChunk`, `ReadFileIndex`, `WriteAnalysisResult`, `AppendProvenanceEvent`) + smoke test `sdk/go/sdk_test.go` en CI job `go-sdk-smoke`
 
 - [x] Tool registry + governance artifacts (P1)

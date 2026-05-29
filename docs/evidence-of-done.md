@@ -694,4 +694,31 @@ For items without evidence, the gap is made explicit.
 
 ---
 
-*Last updated: 2026-05-29*
+## Go SDK minimal profile implementation
+
+**Classification:** reference
+**Maturity:** experimental
+**Done:** 2026-05-23
+
+**Implemented in:**
+- `sdk/go/sdk.go` — `OpenContainer`, `ReadManifest`, `VerifyContainer`, `ReadChunk`,
+  `VerifyChunk`, `MapOffsetToChunk`, `ReadFileIndex`, `WriteAnalysisResult`,
+  `AppendProvenanceEvent`
+- `sdk/go/doc.go` — package documentation
+- `sdk/go/go.mod`, `sdk/go/go.sum` — module definition
+
+**Test evidence:**
+- `sdk/go/sdk_test.go` — smoke tests for read/verify/write paths
+- CI job `go-sdk-smoke` in `.github/workflows/offf-ci.yml`
+
+**Known limitations:**
+- Experimental: API surface may change before v1.0
+- Requires Go toolchain; not part of Rust workspace tests
+- Write paths (analysis result, provenance) are not independently verified against
+  Rust implementation in CI
+
+**Conclusion:** Done criteria met.
+
+---
+
+*Last updated: 2026-06-01*

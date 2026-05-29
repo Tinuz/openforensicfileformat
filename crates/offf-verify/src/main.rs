@@ -57,9 +57,18 @@ struct Args {
     #[arg(long, value_enum, default_value_t = VerifyProfile::Core)]
     profile: VerifyProfile,
 
-    /// Optional machine-readable JSON report output path.
+    /// Write a machine-readable JSON report to this path.
+    /// Alias for --report (both flags are equivalent).
     #[arg(long)]
     report: Option<PathBuf>,
+
+    /// Write a machine-readable JSON report to this path (alias for --report).
+    #[arg(long, name = "report-json")]
+    report_json: Option<PathBuf>,
+
+    /// Write a human-readable Markdown report to this path.
+    #[arg(long, name = "report-md")]
+    report_md: Option<PathBuf>,
 
     /// Validate the lineage of a specific object (object_id).
     /// Requires the object indexes to be present.
@@ -196,6 +205,10 @@ impl VerifyReport {
 fn main() -> Result<()> {
     let args = Args::parse();
 
+    // --report-json is an alias for --report; resolve effective JSON report path.
+    let json_path: Option<PathBuf> = args.report_json.clone().or_else(|| args.report.clone());
+    let md_path: Option<PathBuf> = args.report_md.clone();
+
     // ── Coverage-only mode ────────────────────────────────────────────────────
     if let Some(job_id) = &args.coverage {
         return cmd_print_coverage(&args.container, job_id);
@@ -207,7 +220,8 @@ fn main() -> Result<()> {
             &args.container,
             job_id,
             args.shard.as_deref(),
-            args.report.as_deref(),
+            json_path.as_deref(),
+            md_path.as_deref(),
         )?;
         if !valid {
             std::process::exit(1);
@@ -221,7 +235,8 @@ fn main() -> Result<()> {
             &args.container,
             args.object.as_deref(),
             args.lineage,
-            args.report.as_deref(),
+            json_path.as_deref(),
+            md_path.as_deref(),
         )?;
         if !valid {
             std::process::exit(1);
@@ -234,7 +249,8 @@ fn main() -> Result<()> {
         args.chunks.as_deref(),
         args.proof_chunk.as_deref(),
         args.profile,
-        args.report.as_deref(),
+        json_path.as_deref(),
+        md_path.as_deref(),
     )?;
     if !valid {
         std::process::exit(1);
@@ -249,6 +265,7 @@ fn cmd_verify_parallel_job(
     job_id: &str,
     shard_id_filter: Option<&str>,
     report_path: Option<&std::path::Path>,
+    report_md_path: Option<&std::path::Path>,
 ) -> Result<bool> {
     let container_path = std::path::PathBuf::from(container_arg);
     let mut report = VerifyReport {
@@ -410,11 +427,15 @@ fn cmd_verify_parallel_job(
 
     // Output report.
     report.print();
+    let valid = report.is_valid();
     if let Some(path) = report_path {
-        fs::write(path, serde_json::to_string_pretty(&report)?)?;
+        write_json_report(path, &report, valid)?;
+    }
+    if let Some(path) = report_md_path {
+        write_md_report(path, &report, valid)?;
     }
 
-    Ok(report.is_valid())
+    Ok(valid)
 }
 
 fn cmd_print_coverage(container_arg: &str, job_id: &str) -> Result<()> {
@@ -465,6 +486,7 @@ fn verify(
     proof_chunk_arg: Option<&str>,
     profile: VerifyProfile,
     report_path: Option<&std::path::Path>,
+    report_md_path: Option<&std::path::Path>,
 ) -> Result<bool> {
     let container = ContainerRef::parse(container_arg)?;
     let mut report = VerifyReport {
@@ -966,16 +988,19 @@ fn verify(
         run_legacy_checks(&container, &mut report);
     }
 
-    if profile == VerifyProfile::Conformance && report_path.is_none() {
+    if profile == VerifyProfile::Conformance && report_path.is_none() && report_md_path.is_none() {
         report.warn(
             "Conformance report",
-            "--report not provided; no machine-readable artifact written",
+            "neither --report-json nor --report-md provided; no machine-readable artifact written",
         );
     }
 
     let valid = report.is_valid();
     if let Some(path) = report_path {
         write_json_report(path, &report, valid)?;
+    }
+    if let Some(path) = report_md_path {
+        write_md_report(path, &report, valid)?;
     }
     report.print();
     Ok(valid)
@@ -1151,6 +1176,7 @@ fn verify_object_lineage(
     object_id: Option<&str>,
     full_lineage: bool,
     report_path: Option<&std::path::Path>,
+    report_md_path: Option<&std::path::Path>,
 ) -> Result<bool> {
     let container = ContainerRef::parse(container_arg)?;
     let mut report = VerifyReport {
@@ -1446,6 +1472,9 @@ fn verify_object_lineage(
     let valid = report.is_valid();
     if let Some(path) = report_path {
         write_json_report(path, &report, valid)?;
+    }
+    if let Some(path) = report_md_path {
+        write_md_report(path, &report, valid)?;
     }
     report.print();
     Ok(valid)
@@ -1821,6 +1850,63 @@ fn write_json_report(path: &std::path::Path, report: &VerifyReport, valid: bool)
         "checks": report.checks,
     });
     fs::write(path, serde_json::to_string_pretty(&payload)?)?;
+    Ok(())
+}
+
+fn write_md_report(path: &std::path::Path, report: &VerifyReport, valid: bool) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let counts = report.status_counts();
+    let status_str = if valid { "PASS" } else { "FAIL" };
+    let mut out = String::new();
+    out.push_str("# OFFF Verifier Report\n\n");
+    out.push_str(&format!("**Container:** `{}`\n\n", report.container));
+    out.push_str(&format!("**Profile:** `{:?}`\n\n", report.profile));
+    out.push_str(&format!("**Result:** **{status_str}**\n\n"));
+    out.push_str(&format!(
+        "**Summary:** {} ok, {} warnings, {} failures\n\n",
+        counts.get("ok").copied().unwrap_or(0),
+        counts.get("warn").copied().unwrap_or(0),
+        counts.get("fail").copied().unwrap_or(0),
+    ));
+    out.push_str("## Checks\n\n");
+    out.push_str("| Status | Check | Detail |\n");
+    out.push_str("|--------|-------|--------|\n");
+    for check in &report.checks {
+        let marker = match check.status {
+            CheckStatus::Ok => "✅ OK",
+            CheckStatus::Warn => "⚠️ WARN",
+            CheckStatus::Fail => "❌ FAIL",
+        };
+        let detail = check.detail.as_deref().unwrap_or("—");
+        out.push_str(&format!("| {} | {} | {} |\n", marker, check.label, detail));
+    }
+    out.push('\n');
+    if !valid {
+        out.push_str("## Failed Checks\n\n");
+        for check in report.checks.iter().filter(|c| c.status == CheckStatus::Fail) {
+            out.push_str(&format!(
+                "- **{}**: {}\n",
+                check.label,
+                check.detail.as_deref().unwrap_or("no detail")
+            ));
+        }
+        out.push('\n');
+    }
+    let warn_checks: Vec<_> = report.checks.iter().filter(|c| c.status == CheckStatus::Warn).collect();
+    if !warn_checks.is_empty() {
+        out.push_str("## Warnings\n\n");
+        for check in warn_checks {
+            out.push_str(&format!(
+                "- **{}**: {}\n",
+                check.label,
+                check.detail.as_deref().unwrap_or("no detail")
+            ));
+        }
+        out.push('\n');
+    }
+    fs::write(path, out)?;
     Ok(())
 }
 
