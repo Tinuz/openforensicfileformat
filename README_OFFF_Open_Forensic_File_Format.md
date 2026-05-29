@@ -1203,3 +1203,44 @@ Alles wat daarna wordt toegevoegd, moet dit bewijsmodel respecteren.
 ## 22. Kernzin
 
 OFFF is niet alleen een opslagformaat voor forensische kopieën, maar een bewijsbaar verwerkingsformaat voor schaalbare digitale opsporing.
+
+---
+
+## 23. Project maturity and component classification
+
+OFFF separates components into four categories:
+
+| Category | Description |
+|---|---|
+| **Core** | Format specification, schemas, core library, lineage model |
+| **Reference** | Reference implementations (convert, verify, index, access service, workers, SDKs) |
+| **Demo** | Demo tooling — not conformance evidence, not forensic-grade |
+| **Experimental** | In-development components with known limitations |
+
+Current forensic-ready components (maturity ≥ `forensic-grade-candidate`):
+`offf-core`, `offf-convert`, `offf-verify`, `evidence-container-schema`, `object-lineage-model`, `schema-catalog`.
+
+### Exploded directory vs packed archive
+
+> **The exploded OFFF directory (`*.offf/`) is the canonical representation.**
+>
+> `.offfpack` is a transport/packaging format only.
+> `offf-verify` and all analysis workers operate on the exploded form.
+> Always unpack before verifying.
+
+### Documentation links
+
+| Document | Description |
+|---|---|
+| [docs/status.md](docs/status.md) | Per-component status matrix |
+| [docs/maturity-model.md](docs/maturity-model.md) | Formal maturity level definitions |
+| [docs/component-classification.md](docs/component-classification.md) | Component classification rules and table |
+| [docs/conformance-profiles.md](docs/conformance-profiles.md) | Conformance profile definitions |
+| [docs/evidence-of-done.md](docs/evidence-of-done.md) | Per-backlog-item evidence |
+| [docs/test-traceability.md](docs/test-traceability.md) | Test traceability matrix |
+| [docs/threat-model.md](docs/threat-model.md) | Threat model |
+| [docs/versioning.md](docs/versioning.md) | Versioning and backward compat policy |
+| [docs/definition-of-done.md](docs/definition-of-done.md) | Definition of Done checklist |
+| [docs/packed-container.md](docs/packed-container.md) | Packed container format |
+| [docs/reference-worker-runtime.md](docs/reference-worker-runtime.md) | Worker runtime reference |
+| [reports/release-readiness.md](reports/release-readiness.md) | Generated release readiness report |

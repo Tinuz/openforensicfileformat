@@ -8,13 +8,13 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 use offf_core::{
-    lineage::{export_dot, export_lineage_json, ObjectLineageValidator},
+    lineage::{export_dot, export_lineage_json},
     ntfs::index_ntfs,
     parquet_io::{
         for_each_derivation_batch, for_each_edge_batch, for_each_object_batch,
         read_derivations, read_object_edges, read_object_index, read_physical_to_chunk,
-        write_derivations, write_derivations_batched, write_file_index, write_object_edges,
-        write_object_edges_batched, write_object_index, write_object_index_batched,
+        write_derivations, write_file_index, write_object_edges,
+        write_object_index,
     },
     partition::{detect_and_parse, detect_volume_type},
     provenance::ProvenanceWriter,
@@ -754,13 +754,13 @@ fn cmd_export_lineage(base: &Path, format: &str, out: Option<&Path>) -> Result<(
         }
     }
 
-    if out.is_some() {
+    if let Some(out_path) = out {
         eprintln!(
             "Lineage exported ({} objects, {} edges, {} derivations) → {}",
             objects.len(),
             edges.len(),
             derivations.len(),
-            out.unwrap().display()
+            out_path.display()
         );
     }
     Ok(())

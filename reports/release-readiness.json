@@ -1,0 +1,187 @@
+{
+  "generated_at": "2026-05-29T15:04:20Z",
+  "total_components": 22,
+  "by_classification": {
+    "core": [
+      "conformance-suite",
+      "evidence-container-schema",
+      "extension-model",
+      "object-lineage-model",
+      "offf-core",
+      "schema-catalog"
+    ],
+    "demo": [
+      "demo-scripts"
+    ],
+    "reference": [
+      "go-sdk",
+      "offf-access-service",
+      "offf-annotate",
+      "offf-collect",
+      "offf-convert",
+      "offf-export",
+      "offf-index",
+      "offf-jobs",
+      "offf-keyword-worker",
+      "offf-verify",
+      "offf-yara-worker",
+      "packed-container",
+      "python-sdk",
+      "tool-registry",
+      "worker-runtime-state"
+    ]
+  },
+  "by_maturity": {
+    "demo-only": [
+      "demo-scripts"
+    ],
+    "experimental": [
+      "go-sdk",
+      "offf-access-service",
+      "offf-annotate",
+      "offf-collect",
+      "offf-keyword-worker",
+      "offf-yara-worker",
+      "python-sdk",
+      "tool-registry",
+      "worker-runtime-state"
+    ],
+    "forensic-grade-candidate": [
+      "evidence-container-schema",
+      "object-lineage-model",
+      "offf-convert",
+      "offf-core",
+      "offf-verify",
+      "schema-catalog"
+    ],
+    "reference": [
+      "conformance-suite",
+      "extension-model",
+      "offf-export",
+      "offf-index",
+      "offf-jobs",
+      "packed-container"
+    ]
+  },
+  "forensic_ready": [
+    "evidence-container-schema",
+    "object-lineage-model",
+    "offf-convert",
+    "offf-core",
+    "offf-verify",
+    "schema-catalog"
+  ],
+  "not_forensic_ready": [
+    {
+      "component": "conformance-suite",
+      "maturity": "reference"
+    },
+    {
+      "component": "demo-scripts",
+      "maturity": "demo-only"
+    },
+    {
+      "component": "extension-model",
+      "maturity": "reference"
+    },
+    {
+      "component": "go-sdk",
+      "maturity": "experimental"
+    },
+    {
+      "component": "offf-access-service",
+      "maturity": "experimental"
+    },
+    {
+      "component": "offf-annotate",
+      "maturity": "experimental"
+    },
+    {
+      "component": "offf-collect",
+      "maturity": "experimental"
+    },
+    {
+      "component": "offf-export",
+      "maturity": "reference"
+    },
+    {
+      "component": "offf-index",
+      "maturity": "reference"
+    },
+    {
+      "component": "offf-jobs",
+      "maturity": "reference"
+    },
+    {
+      "component": "offf-keyword-worker",
+      "maturity": "experimental"
+    },
+    {
+      "component": "offf-yara-worker",
+      "maturity": "experimental"
+    },
+    {
+      "component": "packed-container",
+      "maturity": "reference"
+    },
+    {
+      "component": "python-sdk",
+      "maturity": "experimental"
+    },
+    {
+      "component": "tool-registry",
+      "maturity": "experimental"
+    },
+    {
+      "component": "worker-runtime-state",
+      "maturity": "experimental"
+    }
+  ],
+  "gaps": [
+    {
+      "component": "offf-collect",
+      "type": "missing-docs"
+    },
+    {
+      "component": "offf-annotate",
+      "type": "missing-docs"
+    },
+    {
+      "component": "offf-keyword-worker",
+      "type": "missing-docs"
+    },
+    {
+      "component": "offf-yara-worker",
+      "type": "missing-docs"
+    },
+    {
+      "component": "offf-access-service",
+      "type": "missing-docs"
+    },
+    {
+      "component": "worker-runtime-state",
+      "type": "missing-tests"
+    },
+    {
+      "component": "python-sdk",
+      "type": "missing-docs"
+    },
+    {
+      "component": "go-sdk",
+      "type": "missing-docs"
+    },
+    {
+      "component": "tool-registry",
+      "type": "missing-tests"
+    },
+    {
+      "component": "tool-registry",
+      "type": "missing-docs"
+    },
+    {
+      "component": "demo-scripts",
+      "type": "missing-docs"
+    }
+  ],
+  "gap_count": 11
+}

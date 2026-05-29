@@ -155,8 +155,8 @@ P0 - Direct oppakken
   - Extend tool registry capabilities for object-producing workers
   - Enforce capability vs `output_contract` checks at write time
   - Added: 2026-05-24
-  - Status: in-progress
-  - Progress: gestart 2026-05-25
+  - Status: done
+  - Progress: completed 2026-05-26
   - Acceptance:
     - writes to `indexes/objects/*` directly are denied
     - denied writes are audited append-only
@@ -175,7 +175,6 @@ P0 - Direct oppakken
   - Validate lineage chain to root evidence/chunks + provenance refs
   - Add conformance datasets for valid and invalid object graphs
   - Added: 2026-05-24
-  - Status: planned
   - Acceptance:
     - lineage valid/invalid outcomes machine-readable in verify report
     - missing parent/derivation/hash mismatch detected
@@ -320,10 +319,22 @@ P2 - Later
 
 - [x] Threat model and security mapping (P2) ✅ 2026-05-29
   - Add `docs/threat-model.md` with threat-to-mitigation-to-test traceability
+  - Status: done
+  - classification: core
+  - maturity: reference
+  - implemented-in: docs/threat-model.md
+  - tests: gap (documentation artifact — no automated test)
+  - Done: 2026-05-29
 
 - [x] Versioning policy and migration path (P2) ✅ 2026-05-29
   - Add `docs/versioning.md`
   - Add `offf-migrate` path from v0.1 to v0.2 with evidence hash invariants
+  - Status: done
+  - classification: core
+  - maturity: reference
+  - implemented-in: docs/versioning.md
+  - tests: manifest_v010_json_loadable_by_v020_reader, manifest_v020_round_trip_with_extensions
+  - Done: 2026-05-29
 
 - [x] NTFS forensic depth improvements (P2) ✅ 2026-05-28 (completed 2026-05-29)
   - ATTRIBUTE_LIST support: resident + non-resident resolution; merges ADS/file_names from extension records

@@ -1,0 +1,345 @@
+# OFFF Component Metadata Registry
+#
+# Machine-readable source of truth for component classification and maturity.
+# Consumed by:
+#   scripts/check_component_metadata.py
+#   scripts/generate_release_readiness.py
+#
+# Valid classifications: core | reference | demo | experimental | legacy
+# Valid maturity levels: demo-only | experimental | reference | forensic-grade-candidate | forensic-grade
+
+# ── Core components ───────────────────────────────────────────────────────────
+
+[components.offf-core]
+classification = "core"
+maturity = "forensic-grade-candidate"
+description = "Core library: chunk IO, Merkle proofs, provenance, object lineage, extension model, schema types, parallel worker context"
+path = "crates/offf-core"
+docs = ["SPEC_OFFF_Formal_Spec_v0.1.0.md", "docs/component-classification.md", "docs/maturity-model.md"]
+tests = ["cargo test -p offf-core", "cargo test -p offf-integration-tests"]
+conformance_profiles = ["OFFF Reader Conformant", "OFFF Acquisition Conformant", "OFFF Object-Lineage Conformant"]
+known_limitations = [
+    "packed container I/O is reference-level only",
+    "NTFS parser is experimental-maturity",
+    "parallel processing support (shard planner, worker context) is reference-level",
+]
+last_verified = "2026-05-29"
+
+[components.evidence-container-schema]
+classification = "core"
+maturity = "forensic-grade-candidate"
+description = "JSON schemas for manifest (v0.1/v0.2), acquisition, partition table, and provenance event"
+path = "docs/schema"
+docs = ["docs/schema/offf-schema-catalog-0.2.0.json"]
+tests = ["python tests/conformance/run_conformance.py"]
+conformance_profiles = ["OFFF Reader Conformant", "OFFF Acquisition Conformant"]
+known_limitations = []
+last_verified = "2026-05-29"
+
+[components.object-lineage-model]
+classification = "core"
+maturity = "forensic-grade-candidate"
+description = "Schema and type definitions for object index rows, edges, derivations, derived objects, and lineage reports (v0.2)"
+path = "docs/schema"
+docs = [
+    "docs/schema/offf-object-index-row-0.2.0.schema.json",
+    "docs/schema/offf-lineage-report-0.2.0.schema.json",
+]
+tests = ["cargo test -p offf-core", "cargo test -p offf-integration-tests"]
+conformance_profiles = ["OFFF Object-Lineage Conformant"]
+known_limitations = [
+    "lineage verify CLI (--lineage flag, Sprint 12) is partially complete",
+    "deterministic object-index rebuild from events is experimental",
+]
+last_verified = "2026-05-29"
+
+[components.extension-model]
+classification = "core"
+maturity = "reference"
+description = "Generic OFFF extension JSONL types: labels, scopes, sets, decisions, policy refs, access/denied/audit events"
+path = "crates/offf-core/src/extensions.rs"
+docs = ["docs/schema"]
+tests = ["cargo test -p offf-core"]
+conformance_profiles = ["OFFF Extension Conformant"]
+known_limitations = [
+    "extension validation covers known JSONL types only; unknown extension keys are ignored per spec",
+]
+last_verified = "2026-05-29"
+
+[components.schema-catalog]
+classification = "core"
+maturity = "forensic-grade-candidate"
+description = "Schema catalog JSON files for v0.1.0 and v0.2.0"
+path = "docs/schema"
+docs = ["docs/schema/offf-schema-catalog-0.2.0.json"]
+tests = ["cargo fmt --check", "python .github/workflows/offf-ci.yml#schema-validation"]
+conformance_profiles = []
+known_limitations = []
+last_verified = "2026-05-29"
+
+[components.conformance-suite]
+classification = "core"
+maturity = "reference"
+description = "Dataset-driven positive and negative conformance test suite"
+path = "tests/conformance"
+docs = ["tests/conformance/README.md"]
+tests = ["python tests/conformance/run_conformance.py"]
+conformance_profiles = []
+known_limitations = [
+    "negative cases dataset is not yet exhaustive",
+    "conformance report does not yet map to formal profile names",
+]
+last_verified = "2026-05-29"
+
+# ── Reference implementations ─────────────────────────────────────────────────
+
+[components.offf-convert]
+classification = "reference"
+maturity = "forensic-grade-candidate"
+description = "CLI for converting raw/dd (and E01 via ewfexport) sources to OFFF containers"
+path = "crates/offf-convert"
+docs = ["README.md"]
+tests = [
+    "cargo test -p offf-convert",
+    "cargo test -p offf-integration-tests",
+    "python tests/e2e/run_cli_e2e.py",
+]
+conformance_profiles = ["OFFF Acquisition Conformant"]
+known_limitations = [
+    "E01 path requires external ewfexport/libewf to be in PATH",
+    "atomic rename on network filesystem may not be available",
+    "S3 _OFFF_COMPLETE completion marker not yet implemented",
+]
+last_verified = "2026-05-29"
+
+[components.offf-verify]
+classification = "reference"
+maturity = "forensic-grade-candidate"
+description = "CLI verifier for OFFF containers with profile support (core, core+schemas, core+extensions, conformance, legacy)"
+path = "crates/offf-verify"
+docs = ["README.md"]
+tests = [
+    "cargo test -p offf-verify",
+    "cargo test -p offf-integration-tests",
+    "python tests/conformance/run_conformance.py",
+    "python tests/e2e/run_cli_e2e.py",
+]
+conformance_profiles = [
+    "OFFF Reader Conformant",
+    "OFFF Acquisition Conformant",
+    "OFFF Object-Lineage Conformant",
+    "OFFF Extension Conformant",
+]
+known_limitations = [
+    "parallel job verification (--analysis-job) is reference-level",
+    "object lineage verify (--object --lineage) is experimental-maturity",
+]
+last_verified = "2026-05-29"
+
+[components.offf-export]
+classification = "reference"
+maturity = "reference"
+description = "CLI for reconstructing a raw image from an OFFF container, or packing/unpacking to .offfpack"
+path = "crates/offf-export"
+docs = ["README.md"]
+tests = ["cargo test -p offf-export", "cargo test -p offf-integration-tests"]
+conformance_profiles = ["OFFF Reader Conformant"]
+known_limitations = [
+    "remote/S3 export paths are experimental",
+    "no dedicated E2E test for pack/unpack round-trip",
+]
+last_verified = "2026-05-29"
+
+[components.offf-index]
+classification = "reference"
+maturity = "reference"
+description = "CLI for indexing partitions (MBR/GPT), NTFS files, and rebuilding object indexes from job deltas"
+path = "crates/offf-index"
+docs = ["README.md"]
+tests = ["cargo test -p offf-index", "cargo test -p offf-integration-tests"]
+conformance_profiles = ["OFFF Indexer Conformant"]
+known_limitations = [
+    "GPT CRC check and backup GPT fallback are experimental",
+    "NTFS parser is experimental-maturity (ADS/sparse/ATTRIBUTE_LIST supported, not fully forensic-grade)",
+    "object index rebuild (--from-events) is experimental",
+]
+last_verified = "2026-05-29"
+
+[components.offf-jobs]
+classification = "reference"
+maturity = "reference"
+description = "CLI for creating job manifests, running workers, planning shards, finalizing parallel jobs"
+path = "crates/offf-jobs"
+docs = ["README.md"]
+tests = ["cargo test -p offf-jobs", "cargo test -p offf-integration-tests"]
+conformance_profiles = ["OFFF Analysis Worker Conformant"]
+known_limitations = [
+    "deterministic job replay is experimental",
+    "plan-shards and finalize-job subcommands are reference-level",
+]
+last_verified = "2026-05-29"
+
+[components.offf-collect]
+classification = "reference"
+maturity = "experimental"
+description = "CLI for file_collection acquisition mode — ingests filesystem trees into OFFF containers"
+path = "crates/offf-collect"
+docs = []
+tests = ["cargo test -p offf-collect", "cargo test -p offf-integration-tests"]
+conformance_profiles = ["OFFF Acquisition Conformant"]
+known_limitations = [
+    "no dedicated integration tests for file_collection mode yet (Phase I in backlog)",
+    "no E2E test covering full file_collection → verify cycle",
+]
+last_verified = "2026-05-29"
+
+[components.offf-annotate]
+classification = "reference"
+maturity = "experimental"
+description = "CLI for appending human annotation events to the OFFF analysis layer"
+path = "crates/offf-annotate"
+docs = []
+tests = ["cargo test -p offf-annotate"]
+conformance_profiles = ["OFFF Extension Conformant"]
+known_limitations = [
+    "minimal feature set",
+    "no integration tests",
+]
+last_verified = "2026-05-29"
+
+[components.offf-keyword-worker]
+classification = "reference"
+maturity = "experimental"
+description = "Keyword scanning worker: reads OFFF chunks, emits keyword hit rows in append-only analysis layout"
+path = "crates/offf-keyword-worker"
+docs = []
+tests = ["cargo test -p offf-keyword-worker", "python tests/e2e/run_cli_e2e.py"]
+conformance_profiles = ["OFFF Analysis Worker Conformant"]
+known_limitations = [
+    "cross-chunk boundary matching is implemented but not conformance-tested",
+    "no dedicated negative test dataset for boundary/encoding edge cases",
+]
+last_verified = "2026-05-29"
+
+[components.offf-yara-worker]
+classification = "reference"
+maturity = "experimental"
+description = "YARA scanning worker: evaluates YARA rules against OFFF evidence chunks"
+path = "crates/offf-yara-worker"
+docs = []
+tests = ["cargo test -p offf-yara-worker", "python tests/e2e/run_cli_e2e.py"]
+conformance_profiles = ["OFFF Analysis Worker Conformant"]
+known_limitations = [
+    "job output isolation hardening pending",
+    "no dedicated negative test dataset",
+]
+last_verified = "2026-05-29"
+
+[components.offf-access-service]
+classification = "reference"
+maturity = "experimental"
+description = "gRPC/REST access service for OFFF containers with capability-gated write paths and denied-event audit trail"
+path = "crates/offf-access-service"
+docs = []
+tests = [
+    "cargo test -p offf-access-service",
+    "python tests/smoke/phase5_minio_smoke.py",
+]
+conformance_profiles = ["OFFF Access Service Conformant"]
+known_limitations = [
+    "JWT and mTLS auth modes are implemented but not independently security-reviewed",
+    "S3 backend parity is smoke-tested only",
+    "production auth not independently audited",
+]
+last_verified = "2026-05-29"
+
+[components.packed-container]
+classification = "reference"
+maturity = "reference"
+description = "Single-file .offfpack transport format (pack/list/unpack). Exploded directory is the canonical representation."
+path = "crates/offf-core/src/packed.rs"
+docs = ["docs/packed-container.md"]
+tests = ["cargo test -p offf-core"]
+conformance_profiles = []
+known_limitations = [
+    "not in the normative OFFF specification",
+    "verify on a packed container requires unpacking first",
+    "no dedicated E2E test for pack → ship → unpack → verify cycle",
+]
+last_verified = "2026-05-29"
+
+[components.worker-runtime-state]
+classification = "reference"
+maturity = "experimental"
+description = "Job runtime state files (*.state.json, assignment_audit.jsonl, worker_health.jsonl) under jobs/runtime/"
+path = "jobs/runtime"
+docs = ["docs/reference-worker-runtime.md"]
+tests = []
+conformance_profiles = []
+known_limitations = [
+    "reference implementation of worker state tracking",
+    "not part of the OFFF Core specification",
+    "external schedulers may ignore these files and use their own state store",
+    "no unit or integration tests covering runtime state lifecycle",
+]
+last_verified = "2026-05-29"
+
+[components.python-sdk]
+classification = "reference"
+maturity = "experimental"
+description = "Python SDK for OFFF container access, analysis write, lineage queries, and extension events"
+path = "sdk/python"
+docs = []
+tests = ["python -m unittest sdk/python/tests/test_api_contract.py"]
+conformance_profiles = ["OFFF Reader Conformant", "OFFF Analysis Worker Conformant"]
+known_limitations = [
+    "v0.2 API parity not complete for all extension endpoints",
+    "LRU cache is bounded but not battle-tested at scale",
+]
+last_verified = "2026-05-29"
+
+[components.go-sdk]
+classification = "reference"
+maturity = "experimental"
+description = "Go SDK with minimum OFFF surface: container open/read/verify, analysis/provenance append"
+path = "sdk/go"
+docs = []
+tests = ["go test ./... (sdk/go)"]
+conformance_profiles = ["OFFF Reader Conformant"]
+known_limitations = [
+    "v0.2 API parity is incomplete",
+    "no object lineage support",
+    "no extension API support",
+]
+last_verified = "2026-05-29"
+
+[components.tool-registry]
+classification = "reference"
+maturity = "experimental"
+description = "Tool registry schema and example JSON for approved tool identity and capability tracking"
+path = "config/tool-registry.example.json"
+docs = []
+tests = []
+conformance_profiles = ["OFFF Access Service Conformant"]
+known_limitations = [
+    "example file only; no enforcement tooling yet",
+    "integration with access service is experimental",
+]
+last_verified = "2026-05-29"
+
+# ── Demo components ───────────────────────────────────────────────────────────
+
+[components.demo-scripts]
+classification = "demo"
+maturity = "demo-only"
+description = "Demo and smoke scripts for local demonstration of OFFF workflows"
+path = "scripts"
+docs = []
+tests = ["scripts/smoke_check_demo.ps1"]
+conformance_profiles = []
+known_limitations = [
+    "not production-grade",
+    "may use simplified containers and synthetic data",
+    "not OFFF conformance evidence",
+]
+last_verified = "2026-05-29"

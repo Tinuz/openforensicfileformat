@@ -352,6 +352,7 @@ fn cmd_create_object_worker(
 
 // ── offf-jobs create-keyword ──────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 fn cmd_create_keyword(
     case: &Path,
     keywords_csv: &str,

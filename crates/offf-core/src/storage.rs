@@ -481,13 +481,13 @@ pub fn read_derived_object_streaming(
         ContainerRef::Local(base) => {
             let path = base.join(&rel);
             let file = std::fs::File::open(&path)
-                .map_err(|e| OfffError::Io(e))?;
+                .map_err(OfffError::Io)?;
             let mut reader = std::io::BufReader::with_capacity(chunk, file);
             let mut hasher = Sha256::new();
             let mut buf = vec![0u8; chunk];
             loop {
                 let n = reader.read(&mut buf)
-                    .map_err(|e| OfffError::Io(e))?;
+                    .map_err(OfffError::Io)?;
                 if n == 0 {
                     break;
                 }

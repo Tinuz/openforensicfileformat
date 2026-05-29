@@ -137,3 +137,54 @@ jobs:
         with:
           name: conformance-report
           path: tests/conformance/conformance-report.json
+
+  check-maturity-metadata:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Check OFFF component metadata
+        run: python scripts/check_component_metadata.py
+
+  check-test-traceability:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Check test traceability matrix
+        run: python scripts/check_test_traceability.py
+
+  generate-release-readiness:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Generate release readiness report
+        run: python scripts/generate_release_readiness.py
+
+      - name: Upload release readiness report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-readiness-report
+          path: |
+            reports/release-readiness.json
+            reports/release-readiness.md
