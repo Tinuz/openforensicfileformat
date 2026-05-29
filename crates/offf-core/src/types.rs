@@ -121,6 +121,9 @@ pub struct JobManifest {
     pub policy_refs: Vec<String>,
     /// Task-specific parameters (see per-task docs).
     pub parameters: serde_json::Value,
+    /// Optional parallelisation config; absent means single-worker execution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parallelization: Option<ParallelizationConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -135,8 +138,12 @@ pub struct JobInputScope {
     pub target_types: Vec<String>,
     #[serde(default)]
     pub selectors: JobInputSelectors,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include: Option<JobInputInclude>,
     #[serde(default)]
     pub exclude: JobInputExclude,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limits: Option<JobInputLimits>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -872,4 +879,320 @@ impl std::str::FromStr for Compression {
             other => Err(format!("unknown compression: {other}")),
         }
     }
+}
+
+// ── Parallel processing support ───────────────────────────────────────────────
+
+/// Strategy used when dividing an input list into shards.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShardStrategy {
+    /// Slice the sorted input list into contiguous equal-size ranges.
+    DeterministicObjectIdRange,
+    /// Assign input[i] to shard i % shard_count.
+    DeterministicRoundRobin,
+    /// Assign by sha256(object_id)[0] % shard_count.
+    DeterministicHashModulo,
+}
+
+impl ShardStrategy {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::DeterministicObjectIdRange => "deterministic_object_id_range",
+            Self::DeterministicRoundRobin => "deterministic_round_robin",
+            Self::DeterministicHashModulo => "deterministic_hash_modulo",
+        }
+    }
+}
+
+impl std::str::FromStr for ShardStrategy {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "deterministic_object_id_range" => Ok(Self::DeterministicObjectIdRange),
+            "deterministic_round_robin" => Ok(Self::DeterministicRoundRobin),
+            "deterministic_hash_modulo" => Ok(Self::DeterministicHashModulo),
+            other => Err(format!("unknown shard strategy: {other}")),
+        }
+    }
+}
+
+/// Parallelisation configuration embedded in `JobManifest`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParallelizationConfig {
+    pub enabled: bool,
+    /// "sharded" (only supported mode for now).
+    pub mode: String,
+    pub shard_strategy: ShardStrategy,
+    pub shard_count: usize,
+}
+
+/// Inclusion filter for `JobInputScope.include`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct JobInputInclude {
+    /// Filter by `DiscoveredObjectRow.object_type`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub object_types: Vec<String>,
+    /// Filter by file extension derived from `name` / `logical_path`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extensions: Vec<String>,
+    /// Filter by `DiscoveredObjectRow.media_type`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub media_types: Vec<String>,
+    /// Filter by `DiscoveredObjectRow.parser_status`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parser_statuses: Vec<String>,
+}
+
+/// Size and other quantitative limits for `JobInputScope`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct JobInputLimits {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_object_size_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_object_size_bytes: Option<u64>,
+}
+
+/// Source references for an `AnalysisInputObject`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InputSourceRefs {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root_id: Option<String>,
+    /// "sha256:{hex}"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+    /// Path to the content-addressed evidence object (file_collection).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storage_ref: Option<String>,
+}
+
+/// Lightweight metadata attached to an `AnalysisInputObject`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InputObjectMetadata {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extension: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
+}
+
+/// A single processable input object resolved from a `JobManifest` scope.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnalysisInputObject {
+    /// Stable identifier within this job; format "input-{N:06}" padded.
+    pub input_id: String,
+    /// "object" | "chunk" | "file" | "evidence_file" | "derived_object" | "artifact"
+    pub input_type: String,
+    pub object_id: String,
+    pub source_refs: InputSourceRefs,
+    pub metadata: InputObjectMetadata,
+}
+
+/// Compact reference to one input object stored inside a `ShardManifest`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShardInputRef {
+    pub input_id: String,
+    pub object_id: String,
+}
+
+/// Describes how the full input list was divided into shards.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShardPlanRecord {
+    pub parent_job_id: String,
+    pub shard_plan_id: String,
+    pub strategy: ShardStrategy,
+    pub shard_count: usize,
+    pub input_count: usize,
+    /// SHA-256 of the newline-joined sorted object_ids of all inputs.
+    pub input_scope_hash: String,
+    pub created_at: String,
+    pub created_by: String,
+}
+
+/// Describes the subset of input objects assigned to one worker/shard.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShardManifest {
+    pub shard_id: String,
+    pub parent_job_id: String,
+    pub shard_index: usize,
+    pub shard_count: usize,
+    pub input_scope_hash: String,
+    pub input_objects: Vec<ShardInputRef>,
+    /// Base output path for this shard's artifacts.
+    pub output_base_path: String,
+    /// "planned" | "in_progress" | "completed" | "failed"
+    pub status: String,
+}
+
+/// Summary of shard input used in `ShardResultManifest`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShardInputSummary {
+    pub input_scope_hash: String,
+    pub objects_in_shard: u64,
+}
+
+/// Worker identity written by the worker itself into `ShardResultManifest`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkerIdentity {
+    pub tool_id: String,
+    pub name: String,
+    pub version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub binary_sha256: Option<String>,
+}
+
+/// Reference to one output artifact produced by a worker shard.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtifactRef {
+    pub path: String,
+    /// "sha256:{hex}"
+    pub sha256: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schema_ref: Option<String>,
+}
+
+/// Per-shard processing statistics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShardStatistics {
+    pub objects_in_scope: u64,
+    pub objects_processed: u64,
+    pub objects_success: u64,
+    pub objects_error: u64,
+    pub objects_skipped: u64,
+}
+
+/// Final result manifest written by a worker upon shard completion.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShardResultManifest {
+    /// Equals `shard_id` for shard result manifests.
+    pub job_id: String,
+    pub parent_job_id: String,
+    pub shard_id: String,
+    /// "completed" | "failed" | "partial"
+    pub status: String,
+    pub worker: WorkerIdentity,
+    pub input: ShardInputSummary,
+    pub outputs: Vec<ArtifactRef>,
+    pub statistics: ShardStatistics,
+    pub created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<String>,
+}
+
+/// Summary of the parallelisation used in `ParentResultManifest`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParallelizationSummary {
+    pub mode: String,
+    pub shard_count: usize,
+    pub shards_completed: u64,
+    pub shards_failed: u64,
+}
+
+/// Reference to one shard result stored in `ParentResultManifest`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShardResultRef {
+    pub shard_id: String,
+    pub result_manifest_path: String,
+    /// "sha256:{hex}" of the shard_result_manifest.json file.
+    pub sha256: String,
+}
+
+/// Coverage statistics aggregated across all shards.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CoverageReport {
+    pub parent_job_id: String,
+    pub input_scope_hash: String,
+    pub objects_in_scope: u64,
+    pub objects_assigned_to_shards: u64,
+    pub objects_processed: u64,
+    pub objects_success: u64,
+    pub objects_error: u64,
+    pub objects_skipped: u64,
+    pub duplicates_detected: u64,
+    pub missing_inputs: u64,
+}
+
+/// Final parent manifest written by a finalizer after all shards complete.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParentResultManifest {
+    pub job_id: String,
+    /// "completed" | "failed" | "partial"
+    pub status: String,
+    pub parallelization: ParallelizationSummary,
+    pub shard_results: Vec<ShardResultRef>,
+    pub coverage: CoverageReport,
+    pub created_at: String,
+}
+
+/// Generic target reference used in worker error / skipped rows.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkerTarget {
+    #[serde(rename = "type")]
+    pub target_type: String,
+    pub id: String,
+}
+
+/// Error codes for `WorkerErrorRow`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum WorkerErrorCode {
+    InputNotFound,
+    InputOutOfScope,
+    InputTooLarge,
+    InputUnreadable,
+    ChunkVerificationFailed,
+    ObjectHashMismatch,
+    UnsupportedInputType,
+    ToolTimeout,
+    ToolParseFailed,
+    ToolInternalError,
+    OutputWriteFailed,
+    OutputHashMismatch,
+    ScopeResolutionFailed,
+    AuthorizationDenied,
+}
+
+/// Skip reason codes for `WorkerSkippedRow`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SkipReasonCode {
+    ExcludedByLabel,
+    ExcludedBySet,
+    OutOfScope,
+    TooLarge,
+    UnsupportedType,
+    DuplicateInput,
+    PolicyDenied,
+}
+
+/// An error row written to `errors.jsonl` by a worker.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkerErrorRow {
+    pub error_id: String,
+    pub parent_job_id: String,
+    pub shard_id: String,
+    pub target: WorkerTarget,
+    /// Always "error".
+    pub status: String,
+    pub error_code: WorkerErrorCode,
+    pub message: String,
+    pub recoverable: bool,
+    pub created_at: String,
+}
+
+/// A skipped row written to `skipped.jsonl` by a worker.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkerSkippedRow {
+    pub skipped_id: String,
+    pub parent_job_id: String,
+    pub shard_id: String,
+    pub target: WorkerTarget,
+    /// Always "skipped".
+    pub status: String,
+    pub reason_code: SkipReasonCode,
+    pub message: String,
+    pub created_at: String,
 }

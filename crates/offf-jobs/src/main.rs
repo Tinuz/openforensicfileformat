@@ -12,7 +12,12 @@ use sha2::{Digest, Sha256};
 
 use offf_core::{
     parquet_io::read_physical_to_chunk,
-    types::{JobManifest, JobOutputContract, JobScope, ManifestJson, ToolInfo},
+    scope::{compute_input_scope_hash, resolve_analysis_scope},
+    shard::{
+        build_parent_result_manifest, plan_shards, write_parent_result_manifest,
+        write_shard_manifest, write_shard_plan,
+    },
+    types::{JobManifest, JobOutputContract, JobScope, ManifestJson, ShardStrategy, ToolInfo},
 };
 
 const TOOL_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -130,6 +135,30 @@ enum Command {
         /// Path to the OFFF container
         container: PathBuf,
     },
+    /// Plan shards for a parallel analysis job
+    PlanShards {
+        /// Path to the OFFF container
+        #[arg(long)]
+        case: PathBuf,
+        /// Job ID of the parent job manifest (in jobs/{job_id}.json)
+        #[arg(long)]
+        job_id: String,
+        /// Number of shards to create
+        #[arg(long, default_value = "4")]
+        shard_count: usize,
+        /// Shard strategy: deterministic_object_id_range | deterministic_round_robin | deterministic_hash_modulo
+        #[arg(long, default_value = "deterministic_object_id_range")]
+        strategy: String,
+    },
+    /// Finalise a parallel job by writing the parent result manifest
+    FinalizeJob {
+        /// Path to the OFFF container
+        #[arg(long)]
+        case: PathBuf,
+        /// Job ID of the parent job
+        #[arg(long)]
+        job_id: String,
+    },
     /// Run a job with retry and runtime state tracking
     Run {
         /// Path to the OFFF container
@@ -175,6 +204,13 @@ fn main() -> Result<()> {
             output,
         } => cmd_create_yara(&case, &rules, &chunks, scope_ref, include_set, policy_ref, &output),
         Command::List { container } => cmd_list(&container),
+        Command::PlanShards {
+            case,
+            job_id,
+            shard_count,
+            strategy,
+        } => cmd_plan_shards(&case, &job_id, shard_count, &strategy),
+        Command::FinalizeJob { case, job_id } => cmd_finalize_job(&case, &job_id),
         Command::Run {
             case,
             job,
@@ -302,6 +338,7 @@ fn cmd_create_object_worker(
         include_sets,
         policy_refs,
         parameters: serde_json::Value::Object(serde_json::Map::new()),
+        parallelization: None,
     };
 
     let json = serde_json::to_vec_pretty(&manifest).context("serialize manifest")?;
@@ -358,6 +395,7 @@ fn cmd_create_keyword(
             "keywords": keywords,
             "encoding": encodings,
         }),
+        parallelization: None,
     };
 
     write_manifest(case, &manifest, output)?;
@@ -418,6 +456,7 @@ fn cmd_create_yara(
             "rules_hash": format!("sha256:{rules_hash}"),
             "rules_inline": rules_text,
         }),
+        parallelization: None,
     };
 
     write_manifest(case, &manifest, output)?;
@@ -709,6 +748,90 @@ fn append_jsonl<T: Serialize>(path: &Path, event: &T) -> Result<()> {
     Ok(())
 }
 
+// ── offf-jobs plan-shards ─────────────────────────────────────────────────────
+
+fn cmd_plan_shards(
+    case: &Path,
+    job_id: &str,
+    shard_count: usize,
+    strategy_str: &str,
+) -> Result<()> {
+    let strategy: ShardStrategy = strategy_str
+        .parse()
+        .map_err(|e: String| anyhow::anyhow!(e))?;
+
+    // Load the parent job manifest.
+    let job_path = case.join("jobs").join(format!("{job_id}.json"));
+    let job_raw = fs::read_to_string(&job_path)
+        .with_context(|| format!("cannot read job manifest: {}", job_path.display()))?;
+    let _job: JobManifest = serde_json::from_str(&job_raw).context("invalid job manifest")?;
+
+    // Resolve scope.
+    let inputs = resolve_analysis_scope(case, &_job)
+        .context("failed to resolve analysis scope")?;
+
+    let input_scope_hash = compute_input_scope_hash(&inputs);
+
+    println!("Resolved {} input objects (scope hash: {input_scope_hash})", inputs.len());
+
+    if inputs.is_empty() {
+        println!("Warning: no inputs resolved — no object_index.parquet in container?");
+    }
+
+    // Plan shards.
+    let (plan, manifests) =
+        plan_shards(&inputs, job_id, strategy, shard_count, &input_scope_hash)
+            .context("failed to plan shards")?;
+
+    // Write shard plan.
+    write_shard_plan(case, job_id, &plan)?;
+    println!("Shard plan written: analysis/jobs/{job_id}/shard_plan.json");
+
+    // Write shard manifests.
+    for shard in &manifests {
+        write_shard_manifest(case, job_id, shard)?;
+        println!(
+            "  Shard manifest: {} ({} inputs)",
+            shard.shard_id,
+            shard.input_objects.len()
+        );
+    }
+
+    println!("Plan complete: {} shards, strategy: {}", shard_count, strategy_str);
+    Ok(())
+}
+
+// ── offf-jobs finalize-job ────────────────────────────────────────────────────
+
+fn cmd_finalize_job(case: &Path, job_id: &str) -> Result<()> {
+    // Load the parent job to re-resolve scope (for coverage cross-check).
+    let job_path = case.join("jobs").join(format!("{job_id}.json"));
+    let job_raw = fs::read_to_string(&job_path)
+        .with_context(|| format!("cannot read job manifest: {}", job_path.display()))?;
+    let job: JobManifest = serde_json::from_str(&job_raw).context("invalid job manifest")?;
+
+    let inputs = resolve_analysis_scope(case, &job)
+        .context("failed to resolve analysis scope")?;
+
+    let parent_manifest = build_parent_result_manifest(case, job_id, &inputs)
+        .context("failed to build parent result manifest")?;
+
+    write_parent_result_manifest(case, &parent_manifest)
+        .context("failed to write parent result manifest")?;
+
+    println!("Parent result manifest written: analysis/jobs/{job_id}/parent_result_manifest.json");
+    println!("  Status:            {}", parent_manifest.status);
+    println!("  Shards completed:  {}", parent_manifest.parallelization.shards_completed);
+    println!("  Shards failed:     {}", parent_manifest.parallelization.shards_failed);
+    println!("  Objects in scope:  {}", parent_manifest.coverage.objects_in_scope);
+    println!("  Objects processed: {}", parent_manifest.coverage.objects_processed);
+    println!("  Objects success:   {}", parent_manifest.coverage.objects_success);
+    println!("  Objects error:     {}", parent_manifest.coverage.objects_error);
+    println!("  Objects skipped:   {}", parent_manifest.coverage.objects_skipped);
+
+    Ok(())
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Load case_id from manifest and resolve the chunk scope.
@@ -788,6 +911,7 @@ mod tests {
             include_sets: vec![],
             policy_refs: vec![],
             parameters: serde_json::json!({"k": ["x"]}),
+            parallelization: None,
         };
         let raw = serde_json::to_string(&job).unwrap();
 

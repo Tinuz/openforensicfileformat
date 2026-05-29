@@ -44,4 +44,19 @@ pub enum OfffError {
 
     #[error("Invalid merkle tree binary data: {0}")]
     InvalidMerkleTree(String),
+
+    #[error("Shard processing failed for shard {shard_id}: {details}")]
+    ShardProcessingFailed { shard_id: String, details: String },
+
+    #[error("Scope resolution failed: {0}")]
+    ScopeResolutionFailed(String),
+
+    #[error("Duplicate input detected: input_id {input_id} appears in shards {shard_ids:?}")]
+    DuplicateInputDetected {
+        input_id: String,
+        shard_ids: Vec<String>,
+    },
+
+    #[error("Missing shard result manifest for shard {shard_id}")]
+    MissingShardResult { shard_id: String },
 }

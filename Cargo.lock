@@ -3065,6 +3065,7 @@ dependencies = [
  "aws-sdk-s3",
  "bytes",
  "chrono",
+ "hex",
  "parquet",
  "rayon",
  "serde",
@@ -3106,6 +3107,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "hex",
  "offf-core",
  "serde",
  "serde_json",
@@ -3150,6 +3152,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "hex",
  "offf-core",
  "serde",
  "serde_json",

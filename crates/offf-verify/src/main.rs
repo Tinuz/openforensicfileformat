@@ -18,6 +18,8 @@ use offf_core::{
         read_derivations, read_leaves, read_object_edges, read_object_index,
         read_physical_to_chunk, read_physical_to_chunk_bytes,
     },
+    scope::{compute_input_scope_hash, resolve_analysis_scope},
+    shard::{read_shard_manifest, read_shard_plan, read_shard_result_manifest, validate_parallel_job, ShardValidationIssueKind},
     storage::{derived_object_path, read_chunk_verified, ContainerRef},
     types::{AcquisitionJson, AcquisitionMode, ManifestJson, OFFF_V2_VERSION, OFFF_VERSION},
 };
@@ -67,6 +69,19 @@ struct Args {
     /// referential integrity, derivation hash checks, derived object hash verification.
     #[arg(long)]
     lineage: bool,
+
+    /// Validate a parallel analysis job by job_id.
+    /// Checks shard plan, all shard manifests, result manifests, artifact hashes, and coverage.
+    #[arg(long)]
+    analysis_job: Option<String>,
+
+    /// Validate a single shard by shard_id (requires --analysis-job).
+    #[arg(long)]
+    shard: Option<String>,
+
+    /// Print coverage report for a parallel analysis job (by job_id) and exit.
+    #[arg(long)]
+    coverage: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum, Serialize, PartialEq, Eq)]
@@ -179,6 +194,26 @@ impl VerifyReport {
 fn main() -> Result<()> {
     let args = Args::parse();
 
+    // ── Coverage-only mode ────────────────────────────────────────────────────
+    if let Some(job_id) = &args.coverage {
+        return cmd_print_coverage(&args.container, job_id);
+    }
+
+    // ── Parallel job verification ─────────────────────────────────────────────
+    if let Some(job_id) = &args.analysis_job {
+        let valid = cmd_verify_parallel_job(
+            &args.container,
+            job_id,
+            args.shard.as_deref(),
+            args.report.as_deref(),
+        )?;
+        if !valid {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
+    // ── Object lineage verification ───────────────────────────────────────────
     if args.object.is_some() || args.lineage {
         let valid = verify_object_lineage(
             &args.container,
@@ -203,6 +238,223 @@ fn main() -> Result<()> {
         std::process::exit(1);
     }
     Ok(())
+}
+
+// ── Parallel job verification ─────────────────────────────────────────────────
+
+fn cmd_verify_parallel_job(
+    container_arg: &str,
+    job_id: &str,
+    shard_id_filter: Option<&str>,
+    report_path: Option<&std::path::Path>,
+) -> Result<bool> {
+    let container_path = std::path::PathBuf::from(container_arg);
+    let mut report = VerifyReport {
+        container: container_arg.to_string(),
+        profile: VerifyProfile::Core,
+        checks: Vec::new(),
+    };
+
+    // Check 1: job_manifest.json exists.
+    let job_manifest_path = container_path
+        .join("jobs")
+        .join(format!("{job_id}.json"));
+    if !job_manifest_path.exists() {
+        report.fail(
+            "job_manifest",
+            format!("job manifest not found: {}", job_manifest_path.display()),
+        );
+        report.print();
+        return Ok(false);
+    }
+    report.ok("job_manifest");
+
+    // Check 2: shard_plan.json exists and parses.
+    let plan = match read_shard_plan(&container_path, job_id) {
+        Err(e) => {
+            report.fail("shard_plan", format!("cannot read shard_plan.json: {e}"));
+            report.print();
+            return Ok(false);
+        }
+        Ok(p) => {
+            report.ok("shard_plan");
+            p
+        }
+    };
+
+    // Check 3: input_scope_hash in shard_plan matches re-computed hash.
+    // Load job manifest and re-resolve scope.
+    let job_raw = fs::read_to_string(&job_manifest_path)?;
+    if let Ok(job) = serde_json::from_str::<offf_core::types::JobManifest>(&job_raw) {
+        match resolve_analysis_scope(&container_path, &job) {
+            Err(e) => {
+                report.warn("scope_hash", format!("could not re-resolve scope: {e}"));
+            }
+            Ok(inputs) => {
+                let computed_hash = compute_input_scope_hash(&inputs);
+                if computed_hash == plan.input_scope_hash {
+                    report.ok("scope_hash");
+                } else {
+                    report.fail(
+                        "scope_hash",
+                        format!(
+                            "input_scope_hash mismatch: plan has {} but re-computed {}",
+                            plan.input_scope_hash, computed_hash
+                        ),
+                    );
+                }
+            }
+        }
+    }
+
+    // Check 4–7: Validate all shards (or single shard if filtered).
+    let shard_ids_to_check: Vec<String> = if let Some(filter) = shard_id_filter {
+        vec![filter.to_string()]
+    } else {
+        (0..plan.shard_count)
+            .map(|i| format!("{job_id}-shard-{i:02}"))
+            .collect()
+    };
+
+    for shard_id in &shard_ids_to_check {
+        let label_prefix = format!("shard[{shard_id}]");
+
+        // Check shard manifest.
+        match read_shard_manifest(&container_path, job_id, shard_id) {
+            Err(_) => {
+                report.fail(
+                    format!("{label_prefix}/manifest"),
+                    format!("shard manifest missing for {shard_id}"),
+                );
+                continue;
+            }
+            Ok(_) => {
+                report.ok(format!("{label_prefix}/manifest"));
+            }
+        }
+
+        // Check shard result manifest.
+        let result = match read_shard_result_manifest(&container_path, job_id, shard_id) {
+            Err(_) => {
+                report.fail(
+                    format!("{label_prefix}/result_manifest"),
+                    format!("shard result manifest missing for {shard_id}"),
+                );
+                continue;
+            }
+            Ok(r) => {
+                report.ok(format!("{label_prefix}/result_manifest"));
+                r
+            }
+        };
+
+        // Check scope hash consistency in result.
+        if result.input.input_scope_hash != plan.input_scope_hash {
+            report.fail(
+                format!("{label_prefix}/scope_hash"),
+                format!(
+                    "input_scope_hash mismatch: result has {} but plan has {}",
+                    result.input.input_scope_hash, plan.input_scope_hash
+                ),
+            );
+        } else {
+            report.ok(format!("{label_prefix}/scope_hash"));
+        }
+
+        // Check artifact hashes.
+        for artifact in &result.outputs {
+            let artifact_path = container_path.join(&artifact.path);
+            match verify_file_hash(&artifact_path, &artifact.sha256) {
+                Ok(true) => {
+                    report.ok(format!("{label_prefix}/artifact[{}]", artifact.path));
+                }
+                Ok(false) => {
+                    report.fail(
+                        format!("{label_prefix}/artifact[{}]", artifact.path),
+                        format!("hash mismatch; expected {}", artifact.sha256),
+                    );
+                }
+                Err(e) => {
+                    report.fail(
+                        format!("{label_prefix}/artifact[{}]", artifact.path),
+                        format!("cannot read artifact: {e}"),
+                    );
+                }
+            }
+        }
+    }
+
+    // Check 8: Cross-shard duplicate detection (full job only).
+    if shard_id_filter.is_none() {
+        match validate_parallel_job(&container_path, job_id) {
+            Err(e) => {
+                report.warn("cross_shard_validation", format!("validation error: {e}"));
+            }
+            Ok(issues) => {
+                let dups: Vec<_> = issues
+                    .iter()
+                    .filter(|i| i.kind == ShardValidationIssueKind::DuplicateInputId)
+                    .collect();
+                if dups.is_empty() {
+                    report.ok("no_duplicate_inputs");
+                } else {
+                    for dup in &dups {
+                        report.fail("duplicate_input", dup.message.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    // Output report.
+    report.print();
+    if let Some(path) = report_path {
+        fs::write(path, serde_json::to_string_pretty(&report)?)?;
+    }
+
+    Ok(report.is_valid())
+}
+
+fn cmd_print_coverage(container_arg: &str, job_id: &str) -> Result<()> {
+    use offf_core::shard::build_parent_result_manifest;
+
+    let container_path = std::path::PathBuf::from(container_arg);
+
+    // Try to load the parent result manifest first; fall back to re-building it.
+    let coverage = if let Ok(parent) =
+        offf_core::shard::read_parent_result_manifest(&container_path, job_id)
+    {
+        parent.coverage
+    } else {
+        // Re-build on the fly without writing.
+        let job_path = container_path.join("jobs").join(format!("{job_id}.json"));
+        let job_raw = fs::read_to_string(&job_path)?;
+        let job: offf_core::types::JobManifest = serde_json::from_str(&job_raw)?;
+        let inputs = resolve_analysis_scope(&container_path, &job)?;
+        let manifest = build_parent_result_manifest(&container_path, job_id, &inputs)?;
+        manifest.coverage
+    };
+
+    println!("Coverage report for job: {job_id}");
+    println!("  input_scope_hash:         {}", coverage.input_scope_hash);
+    println!("  objects_in_scope:         {}", coverage.objects_in_scope);
+    println!("  objects_assigned:         {}", coverage.objects_assigned_to_shards);
+    println!("  objects_processed:        {}", coverage.objects_processed);
+    println!("  objects_success:          {}", coverage.objects_success);
+    println!("  objects_error:            {}", coverage.objects_error);
+    println!("  objects_skipped:          {}", coverage.objects_skipped);
+    println!("  duplicates_detected:      {}", coverage.duplicates_detected);
+    println!("  missing_inputs:           {}", coverage.missing_inputs);
+
+    Ok(())
+}
+
+fn verify_file_hash(path: &std::path::Path, expected: &str) -> Result<bool> {
+    let data = fs::read(path)?;
+    let mut hasher = Sha256::new();
+    hasher.update(&data);
+    let actual = format!("sha256:{}", hex::encode(hasher.finalize()));
+    Ok(actual == expected)
 }
 
 fn verify(

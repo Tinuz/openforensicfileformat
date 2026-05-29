@@ -1010,3 +1010,384 @@ fn manifest_v020_json_loadable_by_strict_fields() {
     let ext = m.extensions.as_ref().expect("extensions must be Some");
     assert!(ext.entries.contains_key("example-ns:meta"));
 }
+
+// ── Parallel processing integration tests ────────────────────────────────────
+
+use offf_core::{
+    evidence::write_evidence_object,
+    parquet_io::write_object_index_batched,
+    scope::{compute_input_scope_hash, resolve_analysis_scope},
+    shard::{
+        plan_shards, validate_parallel_job,
+        write_shard_manifest, write_shard_plan, write_shard_result_manifest,
+        ShardValidationIssueKind,
+    },
+    types::{
+        ArtifactRef, JobManifest, JobOutputContract, JobScope,
+        ShardInputSummary, ShardResultManifest, ShardStatistics,
+        ShardStrategy, WorkerIdentity,
+    },
+};
+/// Build a minimal file_collection container with `n` evidence objects.
+/// Returns (TempDir, container_path, list of object_ids).
+fn make_file_collection_container(n: usize) -> (TempDir, PathBuf, Vec<String>) {
+    let tmp = TempDir::new().unwrap();
+    let container = tmp.path().to_path_buf();
+
+    // Create directory structure.
+    for dir in &[
+        "chunks/sha256",
+        "indexes/objects",
+        "evidence/objects/sha256",
+        "jobs",
+        "provenance",
+    ] {
+        fs::create_dir_all(container.join(dir)).unwrap();
+    }
+
+    // Write n evidence objects and build the object index.
+    let mut rows: Vec<DiscoveredObjectRow> = Vec::new();
+    let mut object_ids: Vec<String> = Vec::new();
+
+    for i in 0..n {
+        let content = format!("file content {i}").into_bytes();
+        let sha256_hex = write_evidence_object(&container, &content).unwrap();
+        let storage_ref = format!("sha256:{sha256_hex}");
+
+        let object_id = format!("obj-file-{i:06}");
+        object_ids.push(object_id.clone());
+
+        rows.push(DiscoveredObjectRow {
+            object_id: object_id.clone(),
+            object_type: "evidence_file".to_string(),
+            name: Some(format!("file_{i}.txt")),
+            logical_path: Some(format!("/files/file_{i}.txt")),
+            media_type: Some("text/plain".to_string()),
+            size_bytes: Some(content.len() as u64),
+            sha256: Some(storage_ref.clone()),
+            source_layer: "file_collection".to_string(),
+            storage_ref: Some(sha256_hex.clone()),
+            root_source_ref: None,
+            root_id: Some("root-001".to_string()),
+            collection_relative_path: Some(format!("file_{i}.txt")),
+            created_by_job_id: Some("job-collect-001".to_string()),
+            parser_status: "ok".to_string(),
+            provenance_ref: None,
+            schema_version: OFFF_VERSION.to_string(),
+            original_created_at: None,
+            original_modified_at: None,
+            original_accessed_at: None,
+        });
+    }
+
+    // Write object index parquet.
+    let index_path = container.join("indexes/objects/object_index.parquet");
+    write_object_index_batched(
+        &index_path,
+        std::iter::once(rows),
+    )
+    .unwrap();
+
+    // Write a minimal manifest.json.
+    let manifest = serde_json::json!({
+        "offf_version": OFFF_VERSION,
+        "container_id": "urn:offf:case:test-parallel",
+        "created_at": "2026-01-01T00:00:00Z",
+        "created_by_tool": { "name": "test", "version": "0.1.0" },
+        "acquisition_mode": "file_collection",
+        "evidence_roots": [{ "root_id": "root-001", "root_type": "file_collection" }],
+        "indexes": { "object_index": "indexes/objects/object_index.parquet" }
+    });
+    fs::write(container.join("manifest.json"), serde_json::to_string_pretty(&manifest).unwrap())
+        .unwrap();
+
+    (tmp, container, object_ids)
+}
+
+/// Write a fake job manifest and return the job_id.
+fn write_test_job_manifest(container: &Path, task: &str) -> String {
+    let job_id = "job-parallel-test-001".to_string();
+    let manifest = JobManifest {
+        job_id: job_id.clone(),
+        created_at: chrono::Utc::now(),
+        case_id: "urn:offf:case:test-parallel".to_string(),
+        task: task.to_string(),
+        scope: JobScope { chunks: vec!["*".to_string()] },
+        tool: ToolInfo { name: "test-worker".to_string(), version: "0.1.0".to_string() },
+        input_scope: None,
+        output_contract: Some(JobOutputContract {
+            may_produce_results: true,
+            may_produce_objects: false,
+            may_materialize_objects: false,
+            may_produce_edges: false,
+            may_produce_derivations: false,
+        }),
+        scope_ref: None,
+        include_sets: vec![],
+        policy_refs: vec![],
+        parameters: serde_json::json!({}),
+        parallelization: None,
+    };
+    let jobs_dir = container.join("jobs");
+    fs::create_dir_all(&jobs_dir).unwrap();
+    fs::write(
+        jobs_dir.join(format!("{job_id}.json")),
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    job_id
+}
+
+/// Simulate a worker completing a shard by writing a valid shard_result_manifest.
+fn simulate_worker_complete(
+    container: &Path,
+    job_id: &str,
+    shard_id: &str,
+    input_scope_hash: &str,
+    n_inputs: usize,
+) {
+    let shard_dir = container.join(format!("analysis/jobs/{job_id}/shards/{shard_id}"));
+    fs::create_dir_all(&shard_dir).unwrap();
+
+    // Write a minimal results.jsonl.
+    let results_path = shard_dir.join("results.jsonl");
+    let mut content = String::new();
+    for i in 0..n_inputs {
+        content.push_str(&format!("{{\"result\": \"ok\", \"i\": {i}}}\n"));
+    }
+    fs::write(&results_path, &content).unwrap();
+
+    // Compute hash.
+    let mut hasher = Sha256::new();
+    hasher.update(content.as_bytes());
+    let artifact_sha256 = format!("sha256:{}", hex::encode(hasher.finalize()));
+
+    let rel_path = format!("analysis/jobs/{job_id}/shards/{shard_id}/results.jsonl");
+
+    let result = ShardResultManifest {
+        job_id: shard_id.to_string(),
+        parent_job_id: job_id.to_string(),
+        shard_id: shard_id.to_string(),
+        status: "completed".to_string(),
+        worker: WorkerIdentity {
+            tool_id: "test-worker".to_string(),
+            name: "Test Worker".to_string(),
+            version: "0.1.0".to_string(),
+            binary_sha256: None,
+        },
+        input: ShardInputSummary {
+            input_scope_hash: input_scope_hash.to_string(),
+            objects_in_shard: n_inputs as u64,
+        },
+        outputs: vec![ArtifactRef {
+            path: rel_path,
+            sha256: artifact_sha256,
+            schema_ref: None,
+        }],
+        statistics: ShardStatistics {
+            objects_in_scope: n_inputs as u64,
+            objects_processed: n_inputs as u64,
+            objects_success: n_inputs as u64,
+            objects_error: 0,
+            objects_skipped: 0,
+        },
+        created_at: "2026-01-01T00:00:00Z".to_string(),
+        completed_at: Some("2026-01-01T00:01:00Z".to_string()),
+    };
+
+    write_shard_result_manifest(container, &result).unwrap();
+}
+
+#[test]
+fn parallel_job_4_shards_valid() {
+    let (_tmp, container, _object_ids) = make_file_collection_container(20);
+    let job_id = write_test_job_manifest(&container, "extract_text");
+
+    // Resolve scope.
+    let job_raw = fs::read_to_string(container.join("jobs").join(format!("{job_id}.json"))).unwrap();
+    let job: JobManifest = serde_json::from_str(&job_raw).unwrap();
+    let inputs = resolve_analysis_scope(&container, &job).unwrap();
+    assert_eq!(inputs.len(), 20, "should resolve 20 input objects");
+
+    let scope_hash = compute_input_scope_hash(&inputs);
+
+    // Plan 4 shards.
+    let (plan, manifests) = plan_shards(
+        &inputs,
+        &job_id,
+        ShardStrategy::DeterministicObjectIdRange,
+        4,
+        &scope_hash,
+    )
+    .unwrap();
+    write_shard_plan(&container, &job_id, &plan).unwrap();
+
+    for shard in &manifests {
+        write_shard_manifest(&container, &job_id, shard).unwrap();
+    }
+
+    // Verify total assigned inputs = 20.
+    let total: usize = manifests.iter().map(|s| s.input_objects.len()).sum();
+    assert_eq!(total, 20);
+
+    // Simulate all 4 workers completing.
+    for shard in &manifests {
+        simulate_worker_complete(
+            &container,
+            &job_id,
+            &shard.shard_id,
+            &scope_hash,
+            shard.input_objects.len(),
+        );
+    }
+
+    // Validate the parallel job — expect no issues.
+    let issues = validate_parallel_job(&container, &job_id).unwrap();
+    assert!(
+        issues.is_empty(),
+        "expected no validation issues, got: {issues:?}"
+    );
+}
+
+#[test]
+fn parallel_job_missing_shard_result_detected() {
+    let (_tmp, container, _) = make_file_collection_container(12);
+    let job_id = write_test_job_manifest(&container, "extract_text");
+
+    let job_raw = fs::read_to_string(container.join("jobs").join(format!("{job_id}.json"))).unwrap();
+    let job: JobManifest = serde_json::from_str(&job_raw).unwrap();
+    let inputs = resolve_analysis_scope(&container, &job).unwrap();
+    let scope_hash = compute_input_scope_hash(&inputs);
+
+    let (plan, manifests) = plan_shards(
+        &inputs,
+        &job_id,
+        ShardStrategy::DeterministicObjectIdRange,
+        3,
+        &scope_hash,
+    )
+    .unwrap();
+    write_shard_plan(&container, &job_id, &plan).unwrap();
+    for shard in &manifests {
+        write_shard_manifest(&container, &job_id, shard).unwrap();
+    }
+
+    // Only complete shards 0 and 2; leave shard 1 incomplete.
+    simulate_worker_complete(&container, &job_id, &manifests[0].shard_id, &scope_hash, manifests[0].input_objects.len());
+    simulate_worker_complete(&container, &job_id, &manifests[2].shard_id, &scope_hash, manifests[2].input_objects.len());
+
+    let issues = validate_parallel_job(&container, &job_id).unwrap();
+    let missing: Vec<_> = issues
+        .iter()
+        .filter(|i| i.kind == ShardValidationIssueKind::MissingShardResultManifest)
+        .collect();
+    assert_eq!(
+        missing.len(),
+        1,
+        "expected exactly 1 missing shard result, got {missing:?}"
+    );
+}
+
+#[test]
+fn parallel_job_corrupt_artifact_hash_detected() {
+    let (_tmp, container, _) = make_file_collection_container(8);
+    let job_id = write_test_job_manifest(&container, "extract_text");
+
+    let job_raw = fs::read_to_string(container.join("jobs").join(format!("{job_id}.json"))).unwrap();
+    let job: JobManifest = serde_json::from_str(&job_raw).unwrap();
+    let inputs = resolve_analysis_scope(&container, &job).unwrap();
+    let scope_hash = compute_input_scope_hash(&inputs);
+
+    let (plan, manifests) = plan_shards(&inputs, &job_id, ShardStrategy::DeterministicObjectIdRange, 2, &scope_hash).unwrap();
+    write_shard_plan(&container, &job_id, &plan).unwrap();
+    for shard in &manifests {
+        write_shard_manifest(&container, &job_id, shard).unwrap();
+    }
+
+    simulate_worker_complete(&container, &job_id, &manifests[0].shard_id, &scope_hash, manifests[0].input_objects.len());
+    simulate_worker_complete(&container, &job_id, &manifests[1].shard_id, &scope_hash, manifests[1].input_objects.len());
+
+    // Corrupt shard-01's results.jsonl after writing the result manifest.
+    let shard_id = &manifests[1].shard_id;
+    let results_file = container.join(format!("analysis/jobs/{job_id}/shards/{shard_id}/results.jsonl"));
+    fs::write(&results_file, b"corrupted content\n").unwrap();
+
+    let issues = validate_parallel_job(&container, &job_id).unwrap();
+    let hash_issues: Vec<_> = issues
+        .iter()
+        .filter(|i| i.kind == ShardValidationIssueKind::ArtifactHashMismatch)
+        .collect();
+    assert!(
+        !hash_issues.is_empty(),
+        "expected artifact hash mismatch issue, got: {issues:?}"
+    );
+}
+
+#[test]
+fn parallel_job_duplicate_input_detected() {
+    let (_tmp, container, _) = make_file_collection_container(6);
+    let job_id = write_test_job_manifest(&container, "extract_text");
+
+    let job_raw = fs::read_to_string(container.join("jobs").join(format!("{job_id}.json"))).unwrap();
+    let job: JobManifest = serde_json::from_str(&job_raw).unwrap();
+    let inputs = resolve_analysis_scope(&container, &job).unwrap();
+    let scope_hash = compute_input_scope_hash(&inputs);
+
+    let (plan, mut manifests) = plan_shards(&inputs, &job_id, ShardStrategy::DeterministicObjectIdRange, 2, &scope_hash).unwrap();
+    write_shard_plan(&container, &job_id, &plan).unwrap();
+
+    // Inject a duplicate: add shard-00's first input into shard-01.
+    if !manifests[0].input_objects.is_empty() {
+        let dup = manifests[0].input_objects[0].clone();
+        manifests[1].input_objects.push(dup);
+    }
+
+    for shard in &manifests {
+        write_shard_manifest(&container, &job_id, shard).unwrap();
+    }
+    simulate_worker_complete(&container, &job_id, &manifests[0].shard_id, &scope_hash, manifests[0].input_objects.len());
+    simulate_worker_complete(&container, &job_id, &manifests[1].shard_id, &scope_hash, manifests[1].input_objects.len());
+
+    let issues = validate_parallel_job(&container, &job_id).unwrap();
+    let dup_issues: Vec<_> = issues
+        .iter()
+        .filter(|i| i.kind == ShardValidationIssueKind::DuplicateInputId)
+        .collect();
+    assert!(
+        !dup_issues.is_empty(),
+        "expected duplicate input detection, got: {issues:?}"
+    );
+}
+
+#[test]
+fn parallel_job_scope_hash_mismatch_detected() {
+    let (_tmp, container, _) = make_file_collection_container(6);
+    let job_id = write_test_job_manifest(&container, "extract_text");
+
+    let job_raw = fs::read_to_string(container.join("jobs").join(format!("{job_id}.json"))).unwrap();
+    let job: JobManifest = serde_json::from_str(&job_raw).unwrap();
+    let inputs = resolve_analysis_scope(&container, &job).unwrap();
+    let scope_hash = compute_input_scope_hash(&inputs);
+
+    let (plan, manifests) = plan_shards(&inputs, &job_id, ShardStrategy::DeterministicObjectIdRange, 2, &scope_hash).unwrap();
+    write_shard_plan(&container, &job_id, &plan).unwrap();
+    for shard in &manifests {
+        write_shard_manifest(&container, &job_id, shard).unwrap();
+    }
+
+    // Complete shards with a WRONG scope hash.
+    let wrong_hash = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+    for shard in &manifests {
+        simulate_worker_complete(&container, &job_id, &shard.shard_id, wrong_hash, shard.input_objects.len());
+    }
+
+    let issues = validate_parallel_job(&container, &job_id).unwrap();
+    let scope_issues: Vec<_> = issues
+        .iter()
+        .filter(|i| i.kind == ShardValidationIssueKind::ScopeHashMismatch)
+        .collect();
+    assert!(
+        !scope_issues.is_empty(),
+        "expected scope hash mismatch issues, got: {issues:?}"
+    );
+}

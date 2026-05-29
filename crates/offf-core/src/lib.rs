@@ -9,8 +9,11 @@ pub mod packed;
 pub mod parquet_io;
 pub mod partition;
 pub mod provenance;
+pub mod scope;
+pub mod shard;
 pub mod storage;
 pub mod types;
+pub mod worker_context;
 
 pub use error::OfffError;
 pub use extensions::{
@@ -34,5 +37,12 @@ pub use types::{
     DeniedAccessEvent, DiscoveredObjectRow, ExtensionTarget, LabelEvent, ManifestExtensions,
     ObjectEdgeEvent, ObjectEdgeRow, ObjectEvent, PolicyRef, ScopeExclude, ScopeInclude,
     ScopeRecord, SetMembers, SetRecord,
+    // Parallel processing types
+    AnalysisInputObject, ArtifactRef, CoverageReport, InputObjectMetadata, InputSourceRefs,
+    JobInputInclude, JobInputLimits, ParallelizationConfig, ParallelizationSummary,
+    ParentResultManifest, ShardInputRef, ShardInputSummary, ShardManifest, ShardPlanRecord,
+    ShardResultManifest, ShardResultRef, ShardStatistics, ShardStrategy,
+    SkipReasonCode, WorkerErrorCode, WorkerErrorRow, WorkerIdentity, WorkerSkippedRow,
+    WorkerTarget,
     OFFF_V2_VERSION,
 };
