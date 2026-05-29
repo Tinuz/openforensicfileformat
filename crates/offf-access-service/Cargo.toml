@@ -12,6 +12,9 @@ serde_json.workspace = true
 parquet.workspace = true
 arrow.workspace = true
 chrono.workspace = true
+hmac.workspace = true
+base64ct.workspace = true
+sha2.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
 axum = { version = "0.8", features = ["json", "http1"] }
 tower-http = { version = "0.6", features = ["trace"] }

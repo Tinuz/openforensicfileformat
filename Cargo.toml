@@ -24,6 +24,8 @@ repository = "https://github.com/offf/offf"
 [workspace.dependencies]
 # Hashing
 sha2 = "0.10"
+hmac = { version = "0.12", features = ["std"] }
+base64ct = { version = "1", features = ["alloc"] }
 
 # Compression
 zstd = "0.13"

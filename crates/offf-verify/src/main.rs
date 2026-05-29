@@ -5,7 +5,9 @@ use std::{
 };
 
 use anyhow::Result;
+use base64ct::{Base64UrlUnpadded, Encoding};
 use clap::{Parser, ValueEnum};
+use hmac::{Hmac, Mac};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -473,6 +475,58 @@ fn verify(
 
     // ── Check 1: manifest exists and is parseable ──────────────────────────
     let manifest_raw = container.read_text("manifest.json").ok();
+
+    // T-02: Verify manifest HMAC sidecar if OFFF_MANIFEST_HMAC_KEY is set.
+    if let Ok(key_raw) = std::env::var("OFFF_MANIFEST_HMAC_KEY") {
+        if !key_raw.is_empty() {
+            match (manifest_raw.as_deref(), container.read_text("manifest.hmac").ok()) {
+                (Some(manifest_bytes), Some(stored_sig_b64)) => {
+                    let stored_sig_b64 = stored_sig_b64.trim();
+                    match Base64UrlUnpadded::decode_vec(stored_sig_b64) {
+                        Ok(stored_sig) => {
+                            let mut mac = Hmac::<Sha256>::new_from_slice(key_raw.as_bytes())
+                                .expect("HMAC accepts any key length");
+                            mac.update(manifest_bytes.as_bytes());
+                            let expected = mac.finalize().into_bytes();
+                            // Constant-time comparison
+                            let mismatch = expected.len() != stored_sig.len()
+                                || expected
+                                    .iter()
+                                    .zip(stored_sig.iter())
+                                    .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+                                    != 0;
+                            if mismatch {
+                                report.fail(
+                                    "manifest HMAC",
+                                    "manifest.hmac signature mismatch — manifest may have been tampered with",
+                                );
+                                report.print();
+                                return Ok(false);
+                            } else {
+                                report.ok("manifest HMAC verified");
+                            }
+                        }
+                        Err(_) => {
+                            report.fail("manifest HMAC", "manifest.hmac contains invalid base64url");
+                            report.print();
+                            return Ok(false);
+                        }
+                    }
+                }
+                (_, None) => {
+                    report.fail(
+                        "manifest HMAC",
+                        "OFFF_MANIFEST_HMAC_KEY is set but manifest.hmac is absent",
+                    );
+                    report.print();
+                    return Ok(false);
+                }
+                (None, _) => {
+                    // manifest.json itself is missing; the next check will handle it
+                }
+            }
+        }
+    }
 
     let manifest_value: Option<serde_json::Value> = manifest_raw
         .as_ref()

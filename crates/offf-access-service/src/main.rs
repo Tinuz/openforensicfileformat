@@ -6,12 +6,15 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use axum::{
-    extract::{Path as AxPath, Query, State},
+    extract::{DefaultBodyLimit, Path as AxPath, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response as AxumResponse},
     routing::{get, post},
     Json, Router,
 };
+use base64ct::{Base64UrlUnpadded, Encoding};
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
 use chrono::Utc;
 use offf_core::{
     chunk::hex_sha256,
@@ -43,11 +46,16 @@ use grpc::{
 };
 use offf_access_service::grpc;
 
+/// T-10: Maximum number of rows accepted in a single write request (DoS guard).
+const MAX_ROWS_PER_REQUEST: usize = 50_000;
+
 #[derive(Clone)]
 struct AppState {
     cases_root: String,
     tool_registry_path: String,
     auth_mode: AuthMode,
+    /// HMAC-SHA256 signing key for JWT mode. Required when auth_mode == Jwt.
+    jwt_secret: Option<Vec<u8>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -262,6 +270,13 @@ async fn main() -> Result<()> {
         .as_deref()
         .and_then(AuthMode::parse)
         .unwrap_or(AuthMode::DevHeaders);
+    let jwt_secret: Option<Vec<u8>> = env::var("OFFF_JWT_SECRET")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.into_bytes());
+    if matches!(auth_mode, AuthMode::Jwt) && jwt_secret.is_none() {
+        anyhow::bail!("OFFF_JWT_SECRET must be set when OFFF_AUTH_MODE=jwt");
+    }
     let rest_addr: SocketAddr = rest_bind.parse().context("invalid OFFF_ACCESS_BIND")?;
     let grpc_addr: SocketAddr = grpc_bind.parse().context("invalid OFFF_ACCESS_GRPC_BIND")?;
 
@@ -269,6 +284,7 @@ async fn main() -> Result<()> {
         cases_root,
         tool_registry_path,
         auth_mode,
+        jwt_secret,
     };
 
     tracing::info!(auth_mode = %state.auth_mode.as_str(), "access auth mode configured");
@@ -329,6 +345,7 @@ async fn main() -> Result<()> {
             "/cases/{case_id}/objects/{object_id}/content",
             get(rest_get_object_content),
         )
+        .layer(DefaultBodyLimit::max(10 * 1024 * 1024)) // T-10: 10 MB request body limit
         .layer(TraceLayer::new_for_http())
         .with_state(state.clone());
 
@@ -448,7 +465,7 @@ impl OfffAccessService for GrpcAccessService {
         &self,
         request: Request<WriteAnalysisResultsRequest>,
     ) -> Result<GrpcResponse<WriteAnalysisResultsResponse>, Status> {
-        let actor = match actor_from_metadata(self.state.auth_mode, request.metadata()) {
+        let actor = match actor_from_metadata(self.state.auth_mode, request.metadata(), self.state.jwt_secret.as_deref()) {
             Ok(actor) => actor,
             Err(err) => {
                 log_denied_write_best_effort(
@@ -533,7 +550,7 @@ impl OfffAccessService for GrpcAccessService {
         &self,
         request: Request<AppendProvenanceEventRequest>,
     ) -> Result<GrpcResponse<AppendProvenanceEventResponse>, Status> {
-        let actor = match actor_from_metadata(self.state.auth_mode, request.metadata()) {
+        let actor = match actor_from_metadata(self.state.auth_mode, request.metadata(), self.state.jwt_secret.as_deref()) {
             Ok(actor) => actor,
             Err(err) => {
                 log_denied_write_best_effort(
@@ -617,7 +634,7 @@ impl OfffAccessService for GrpcAccessService {
         &self,
         request: Request<AppendAnalysisCorrectionRequest>,
     ) -> Result<GrpcResponse<AppendAnalysisCorrectionResponse>, Status> {
-        let actor = match actor_from_metadata(self.state.auth_mode, request.metadata()) {
+        let actor = match actor_from_metadata(self.state.auth_mode, request.metadata(), self.state.jwt_secret.as_deref()) {
             Ok(actor) => actor,
             Err(err) => {
                 log_denied_write_best_effort(
@@ -701,7 +718,7 @@ impl OfffAccessService for GrpcAccessService {
         &self,
         request: Request<WriteObjectDeltaRequest>,
     ) -> Result<GrpcResponse<WriteObjectDeltaResponse>, Status> {
-        let actor = match actor_from_metadata(self.state.auth_mode, request.metadata()) {
+        let actor = match actor_from_metadata(self.state.auth_mode, request.metadata(), self.state.jwt_secret.as_deref()) {
             Ok(a) => a,
             Err(err) => {
                 log_denied_write_best_effort(
@@ -771,7 +788,7 @@ impl OfffAccessService for GrpcAccessService {
         &self,
         request: Request<WriteObjectEdgeDeltaRequest>,
     ) -> Result<GrpcResponse<WriteObjectEdgeDeltaResponse>, Status> {
-        let actor = match actor_from_metadata(self.state.auth_mode, request.metadata()) {
+        let actor = match actor_from_metadata(self.state.auth_mode, request.metadata(), self.state.jwt_secret.as_deref()) {
             Ok(a) => a,
             Err(err) => {
                 log_denied_write_best_effort(
@@ -841,7 +858,7 @@ impl OfffAccessService for GrpcAccessService {
         &self,
         request: Request<WriteDerivationDeltaRequest>,
     ) -> Result<GrpcResponse<WriteDerivationDeltaResponse>, Status> {
-        let actor = match actor_from_metadata(self.state.auth_mode, request.metadata()) {
+        let actor = match actor_from_metadata(self.state.auth_mode, request.metadata(), self.state.jwt_secret.as_deref()) {
             Ok(a) => a,
             Err(err) => {
                 log_denied_write_best_effort(
@@ -911,7 +928,7 @@ impl OfffAccessService for GrpcAccessService {
         &self,
         request: Request<WriteMaterializedObjectRequest>,
     ) -> Result<GrpcResponse<WriteMaterializedObjectResponse>, Status> {
-        let actor = match actor_from_metadata(self.state.auth_mode, request.metadata()) {
+        let actor = match actor_from_metadata(self.state.auth_mode, request.metadata(), self.state.jwt_secret.as_deref()) {
             Ok(a) => a,
             Err(err) => {
                 log_denied_write_best_effort(
@@ -1111,7 +1128,7 @@ async fn write_analysis_results(
     headers: HeaderMap,
     Json(payload): Json<AnalysisResultsRequest>,
 ) -> Result<Json<WriteResultResponse>, ApiError> {
-    let actor = match actor_from_headers(state.auth_mode, &headers) {
+    let actor = match actor_from_headers(state.auth_mode, &headers, state.jwt_secret.as_deref()) {
         Ok(actor) => actor,
         Err(err) => {
             log_denied_write_best_effort(
@@ -1191,7 +1208,7 @@ async fn append_provenance_event(
     headers: HeaderMap,
     Json(payload): Json<ProvenanceEventRequest>,
 ) -> Result<Json<AppendProvenanceResponse>, ApiError> {
-    let actor = match actor_from_headers(state.auth_mode, &headers) {
+    let actor = match actor_from_headers(state.auth_mode, &headers, state.jwt_secret.as_deref()) {
         Ok(actor) => actor,
         Err(err) => {
             log_denied_write_best_effort(
@@ -1265,7 +1282,7 @@ async fn append_analysis_correction(
     headers: HeaderMap,
     Json(payload): Json<AnalysisCorrectionRequest>,
 ) -> Result<Json<AppendAnalysisCorrectionJsonResponse>, ApiError> {
-    let actor = match actor_from_headers(state.auth_mode, &headers) {
+    let actor = match actor_from_headers(state.auth_mode, &headers, state.jwt_secret.as_deref()) {
         Ok(actor) => actor,
         Err(err) => {
             log_denied_write_best_effort(
@@ -1345,7 +1362,7 @@ async fn rest_write_object_delta(
     headers: HeaderMap,
     Json(payload): Json<ObjectDeltaRequest>,
 ) -> Result<Json<ObjectDeltaResponse>, ApiError> {
-    let actor = actor_from_headers(state.auth_mode, &headers).inspect_err(|err| {
+    let actor = actor_from_headers(state.auth_mode, &headers, state.jwt_secret.as_deref()).inspect_err(|err| {
         log_denied_write_best_effort(&state, &case_id, "write_object_delta", &err.message, None);
     })?;
     if !actor.role.can_write_analysis() {
@@ -1395,7 +1412,7 @@ async fn rest_write_object_edge_delta(
     headers: HeaderMap,
     Json(payload): Json<ObjectDeltaRequest>,
 ) -> Result<Json<ObjectDeltaResponse>, ApiError> {
-    let actor = actor_from_headers(state.auth_mode, &headers).inspect_err(|err| {
+    let actor = actor_from_headers(state.auth_mode, &headers, state.jwt_secret.as_deref()).inspect_err(|err| {
         log_denied_write_best_effort(
             &state,
             &case_id,
@@ -1451,7 +1468,7 @@ async fn rest_write_derivation_delta(
     headers: HeaderMap,
     Json(payload): Json<ObjectDeltaRequest>,
 ) -> Result<Json<ObjectDeltaResponse>, ApiError> {
-    let actor = actor_from_headers(state.auth_mode, &headers).inspect_err(|err| {
+    let actor = actor_from_headers(state.auth_mode, &headers, state.jwt_secret.as_deref()).inspect_err(|err| {
         log_denied_write_best_effort(
             &state,
             &case_id,
@@ -1507,7 +1524,7 @@ async fn rest_write_materialized_object(
     headers: HeaderMap,
     body: bytes::Bytes,
 ) -> Result<Json<WriteMaterializedObjectRestResponse>, ApiError> {
-    let actor = actor_from_headers(state.auth_mode, &headers).inspect_err(|err| {
+    let actor = actor_from_headers(state.auth_mode, &headers, state.jwt_secret.as_deref()).inspect_err(|err| {
         log_denied_write_best_effort(
             &state,
             &case_id,
@@ -1617,6 +1634,13 @@ fn write_object_delta_rows(
     artifact: &str,
     rows: &[Value],
 ) -> Result<(String, String), ApiError> {
+    // T-10: guard against oversized batch writes
+    if rows.len() > MAX_ROWS_PER_REQUEST {
+        return Err(ApiError::bad_request(format!(
+            "rows.len() {} exceeds maximum {MAX_ROWS_PER_REQUEST}",
+            rows.len()
+        )));
+    }
     let job_id_clean = normalize_job_id(job_id)?;
     let rel = format!("analysis/jobs/{job_id_clean}/{artifact}.jsonl");
     if case_ref.exists(&rel).map_err(ApiError::from)? {
@@ -1773,6 +1797,13 @@ fn write_analysis_rows(
     relative_path: &str,
     rows: &[Value],
 ) -> Result<String, ApiError> {
+    // T-10: guard against oversized batch writes
+    if rows.len() > MAX_ROWS_PER_REQUEST {
+        return Err(ApiError::bad_request(format!(
+            "rows.len() {} exceeds maximum {MAX_ROWS_PER_REQUEST}",
+            rows.len()
+        )));
+    }
     let rel = normalize_rel_path(relative_path)?;
     if !rel.starts_with("analysis/jobs/") {
         return Err(ApiError::bad_request(
@@ -1813,7 +1844,82 @@ fn write_analysis_rows(
     Ok(rel)
 }
 
-fn actor_from_headers(auth_mode: AuthMode, headers: &HeaderMap) -> Result<ActorContext, ApiError> {
+/// T-04/T-03/T-09: Validate a HMAC-HS256 bearer token and extract actor claims.
+///
+/// Token format: `<base64url_json_payload>.<base64url_hmac_sha256_signature>`
+/// Payload JSON: `{"tool_id":"...","role":"...","exp":<unix_epoch_secs>}`
+///
+/// Returns `(tool_id, role)` on success, or an `ApiError::unauthorized` on any failure.
+fn validate_hmac_token(token: &str, secret: &[u8]) -> Result<(String, String), ApiError> {
+    let invalid = || ApiError::unauthorized("invalid or expired token");
+
+    let (payload_b64, sig_b64) = token.split_once('.').ok_or_else(invalid)?;
+
+    // Verify HMAC-SHA256 signature over the payload segment.
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret)
+        .map_err(|_| ApiError::unauthorized("token verification error"))?;
+    mac.update(payload_b64.as_bytes());
+    let expected_sig = mac.finalize().into_bytes();
+    let provided_sig = Base64UrlUnpadded::decode_vec(sig_b64).map_err(|_| invalid())?;
+    // Constant-time comparison to prevent timing attacks.
+    if expected_sig.len() != provided_sig.len() {
+        return Err(invalid());
+    }
+    use std::ops::BitXor;
+    let mismatch = expected_sig
+        .iter()
+        .zip(provided_sig.iter())
+        .fold(0u8, |acc, (a, b)| acc | a.bitxor(b));
+    if mismatch != 0 {
+        return Err(invalid());
+    }
+
+    // Decode payload.
+    let payload_bytes = Base64UrlUnpadded::decode_vec(payload_b64).map_err(|_| invalid())?;
+    let payload: serde_json::Value =
+        serde_json::from_slice(&payload_bytes).map_err(|_| invalid())?;
+
+    // Validate expiry.
+    let exp = payload
+        .get("exp")
+        .and_then(|v| v.as_i64())
+        .ok_or_else(invalid)?;
+    let now = Utc::now().timestamp();
+    if now > exp {
+        return Err(ApiError::unauthorized("token expired"));
+    }
+
+    let tool_id = payload
+        .get("tool_id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(invalid)?
+        .to_string();
+    let role = payload
+        .get("role")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(invalid)?
+        .to_string();
+
+    Ok((tool_id, role))
+}
+
+fn actor_from_headers(auth_mode: AuthMode, headers: &HeaderMap, jwt_secret: Option<&[u8]>) -> Result<ActorContext, ApiError> {
+    // T-04: In JWT mode, validate the signed bearer token instead of trusting raw headers.
+    if matches!(auth_mode, AuthMode::Jwt) {
+        let secret = jwt_secret.ok_or_else(|| ApiError::unauthorized("jwt mode not configured"))?;
+        let bearer = headers
+            .get(header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .ok_or_else(|| ApiError::unauthorized("missing Authorization: Bearer <token>"))?;
+        let (tool_id, role_str) = validate_hmac_token(bearer, secret)?;
+        let role = AppRole::parse(&role_str)
+            .ok_or_else(|| ApiError::unauthorized("invalid role in token"))?;
+        return Ok(ActorContext { role, tool_id });
+    }
+
     let role_raw = headers
         .get(auth_mode.role_header())
         .and_then(|v| v.to_str().ok())
@@ -1849,7 +1955,26 @@ fn actor_from_headers(auth_mode: AuthMode, headers: &HeaderMap) -> Result<ActorC
 fn actor_from_metadata(
     auth_mode: AuthMode,
     metadata: &tonic::metadata::MetadataMap,
+    jwt_secret: Option<&[u8]>,
 ) -> Result<ActorContext, AuthError> {
+    // T-04: In JWT mode, validate the signed bearer token from the gRPC Authorization metadata.
+    if matches!(auth_mode, AuthMode::Jwt) {
+        let secret = jwt_secret
+            .ok_or_else(|| AuthError::Unauthorized("jwt mode not configured".to_string()))?;
+        let bearer = metadata
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .ok_or_else(|| {
+                AuthError::Unauthorized("missing authorization: Bearer <token>".to_string())
+            })?;
+        let (tool_id, role_str) = validate_hmac_token(bearer, secret)
+            .map_err(|e| AuthError::Unauthorized(e.message))?;
+        let role = AppRole::parse(&role_str)
+            .ok_or_else(|| AuthError::Unauthorized("invalid role in token".to_string()))?;
+        return Ok(ActorContext { role, tool_id });
+    }
+
     let role_raw = metadata
         .get(auth_mode.role_header())
         .ok_or_else(|| {
@@ -2408,5 +2533,125 @@ impl From<parquet::errors::ParquetError> for ApiError {
 impl From<arrow::error::ArrowError> for ApiError {
     fn from(value: arrow::error::ArrowError) -> Self {
         ApiError::bad_request(value.to_string())
+    }
+}
+
+// ── Unit tests ────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // T-06: Explicit path traversal negative tests for normalize_rel_path
+    #[test]
+    fn path_traversal_dot_dot_blocked() {
+        let err = normalize_rel_path("analysis/jobs/../../../etc/passwd").unwrap_err();
+        assert!(err.message.contains("traversal"));
+    }
+
+    #[test]
+    fn path_traversal_encoded_dot_dot_blocked() {
+        // Encoded ../ should still contain ".." after basic normalisation
+        let err = normalize_rel_path("analysis/jobs/..%2F..%2Fetc").unwrap_err();
+        assert!(err.message.contains("traversal"));
+    }
+
+    #[test]
+    fn path_traversal_dot_dot_in_segment_blocked() {
+        let err = normalize_rel_path("analysis/..jobs/evil.jsonl").unwrap_err();
+        assert!(err.message.contains("traversal"));
+    }
+
+    #[test]
+    fn path_traversal_backslash_converted() {
+        // Backslash is converted to forward-slash, then the path is valid
+        let result = normalize_rel_path("analysis\\jobs\\job1\\hits.jsonl").unwrap();
+        assert_eq!(result, "analysis/jobs/job1/hits.jsonl");
+    }
+
+    #[test]
+    fn path_traversal_backslash_with_dot_dot_blocked() {
+        let err = normalize_rel_path("analysis\\..\\etc\\passwd").unwrap_err();
+        assert!(err.message.contains("traversal"));
+    }
+
+    #[test]
+    fn path_traversal_leading_slash_stripped() {
+        let result = normalize_rel_path("/analysis/jobs/x/hits.jsonl").unwrap();
+        assert_eq!(result, "analysis/jobs/x/hits.jsonl");
+    }
+
+    #[test]
+    fn path_valid_accepted() {
+        let result = normalize_rel_path("analysis/jobs/job-123/keyword_hits.jsonl").unwrap();
+        assert_eq!(result, "analysis/jobs/job-123/keyword_hits.jsonl");
+    }
+
+    // T-04: Unit tests for HMAC token validation
+    fn make_token(payload_json: &str, secret: &[u8]) -> String {
+        let payload_b64 = Base64UrlUnpadded::encode_string(payload_json.as_bytes());
+        let mut mac = Hmac::<Sha256>::new_from_slice(secret).unwrap();
+        mac.update(payload_b64.as_bytes());
+        let sig = mac.finalize().into_bytes();
+        let sig_b64 = Base64UrlUnpadded::encode_string(&sig);
+        format!("{payload_b64}.{sig_b64}")
+    }
+
+    #[test]
+    fn jwt_valid_token_accepted() {
+        let secret = b"test-secret-key";
+        let exp = Utc::now().timestamp() + 3600;
+        let payload = format!(r#"{{"tool_id":"analyzer-1","role":"analysis_worker","exp":{exp}}}"#);
+        let token = make_token(&payload, secret);
+        let (tool_id, role) = validate_hmac_token(&token, secret).unwrap();
+        assert_eq!(tool_id, "analyzer-1");
+        assert_eq!(role, "analysis_worker");
+    }
+
+    #[test]
+    fn jwt_wrong_secret_rejected() {
+        let exp = Utc::now().timestamp() + 3600;
+        let payload = format!(r#"{{"tool_id":"t","role":"viewer","exp":{exp}}}"#);
+        let token = make_token(&payload, b"correct-secret");
+        let err = validate_hmac_token(&token, b"wrong-secret").unwrap_err();
+        assert_eq!(err.status, axum::http::StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn jwt_expired_token_rejected() {
+        let secret = b"test-secret-key";
+        let exp = Utc::now().timestamp() - 1; // 1 second in the past
+        let payload = format!(r#"{{"tool_id":"t","role":"viewer","exp":{exp}}}"#);
+        let token = make_token(&payload, secret);
+        let err = validate_hmac_token(&token, secret).unwrap_err();
+        assert!(err.message.contains("expired"));
+    }
+
+    #[test]
+    fn jwt_tampered_payload_rejected() {
+        let secret = b"test-secret-key";
+        let exp = Utc::now().timestamp() + 3600;
+        let payload = format!(r#"{{"tool_id":"t","role":"viewer","exp":{exp}}}"#);
+        let token = make_token(&payload, secret);
+        // Replace the payload segment with a tampered one
+        let sig = token.split('.').nth(1).unwrap();
+        let tampered_payload =
+            Base64UrlUnpadded::encode_string(b"{\"tool_id\":\"evil\",\"role\":\"admin\",\"exp\":9999999999}");
+        let tampered_token = format!("{tampered_payload}.{sig}");
+        let err = validate_hmac_token(&tampered_token, secret).unwrap_err();
+        assert_eq!(err.status, axum::http::StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn jwt_missing_dot_separator_rejected() {
+        let err = validate_hmac_token("notavalidtoken", b"secret").unwrap_err();
+        assert_eq!(err.status, axum::http::StatusCode::UNAUTHORIZED);
+    }
+
+    // T-10: max rows guard
+    #[test]
+    fn max_rows_per_request_constant_is_reasonable() {
+        assert!(MAX_ROWS_PER_REQUEST >= 1_000);
+        assert!(MAX_ROWS_PER_REQUEST <= 1_000_000);
     }
 }

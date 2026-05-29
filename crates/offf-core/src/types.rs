@@ -1196,3 +1196,102 @@ pub struct WorkerSkippedRow {
     pub message: String,
     pub created_at: String,
 }
+
+// ── T-08: Injection / serialisation safety tests ──────────────────────────────
+//
+// These tests verify that user-controlled strings containing special characters
+// (quotes, newlines, commas, backslashes) are safely handled by serde_json when
+// serialised to JSONL rows, preventing CSV/JSON injection in output files.
+
+#[cfg(test)]
+mod serialisation_safety_tests {
+    use serde_json::{json, Value};
+
+    fn round_trip(v: &Value) -> Value {
+        let serialised = serde_json::to_string(v).expect("serialise");
+        // Serialised line must not contain a bare, unescaped newline
+        assert!(
+            !serialised.contains('\n'),
+            "serialised JSON must not contain bare newline: {serialised:?}"
+        );
+        serde_json::from_str(&serialised).expect("deserialise")
+    }
+
+    #[test]
+    fn filename_with_embedded_quote_round_trips() {
+        let v = json!({ "path": "folder/evil\"file\".txt", "size": 42 });
+        let back = round_trip(&v);
+        assert_eq!(back["path"].as_str().unwrap(), "folder/evil\"file\".txt");
+    }
+
+    #[test]
+    fn filename_with_newline_round_trips() {
+        let v = json!({ "path": "a\nb" });
+        let back = round_trip(&v);
+        assert_eq!(back["path"].as_str().unwrap(), "a\nb");
+    }
+
+    #[test]
+    fn filename_with_carriage_return_round_trips() {
+        let v = json!({ "path": "a\rb" });
+        let back = round_trip(&v);
+        assert_eq!(back["path"].as_str().unwrap(), "a\rb");
+    }
+
+    #[test]
+    fn keyword_with_comma_and_quote_round_trips() {
+        // Simulates a keyword like: "hello","world"
+        let keyword = r#""hello","world""#;
+        let v = json!({ "keyword": keyword, "offset": 0 });
+        let back = round_trip(&v);
+        assert_eq!(back["keyword"].as_str().unwrap(), keyword);
+    }
+
+    #[test]
+    fn yara_rule_name_with_special_chars_round_trips() {
+        let rule = "malware_detect\x00\x1f";
+        let v = json!({ "rule_name": rule, "file_id": 1u64 });
+        let back = round_trip(&v);
+        assert_eq!(back["rule_name"].as_str().unwrap(), rule);
+    }
+
+    #[test]
+    fn nested_json_string_does_not_break_jsonl() {
+        // A field that itself contains a JSON fragment should be escaped
+        let v = json!({ "details": "{\"key\": \"value\", \"arr\": [1,2]}" });
+        let back = round_trip(&v);
+        assert_eq!(
+            back["details"].as_str().unwrap(),
+            "{\"key\": \"value\", \"arr\": [1,2]}"
+        );
+    }
+
+    #[test]
+    fn backslash_in_path_round_trips() {
+        // Windows-style path stored in a forensic record
+        let v = json!({ "path": r"C:\Users\evil\doc.txt" });
+        let back = round_trip(&v);
+        assert_eq!(back["path"].as_str().unwrap(), r"C:\Users\evil\doc.txt");
+    }
+
+    #[test]
+    fn jsonl_rows_are_newline_delimited_correctly() {
+        // Simulate how write_analysis_rows appends rows
+        let rows: Vec<Value> = vec![
+            json!({ "path": "a/b.txt", "size": 1 }),
+            json!({ "path": "x\ny.txt", "size": 2 }), // path with embedded newline
+        ];
+        let mut output = String::new();
+        for row in &rows {
+            output.push_str(&serde_json::to_string(row).unwrap());
+            output.push('\n');
+        }
+        let lines: Vec<&str> = output.lines().collect();
+        // Must have exactly 2 lines — the embedded newline must be escaped
+        assert_eq!(lines.len(), 2, "JSONL output must have exactly 2 lines");
+        // Each line must be parseable JSON
+        for line in &lines {
+            serde_json::from_str::<Value>(line).expect("each JSONL line must be valid JSON");
+        }
+    }
+}

@@ -7,7 +7,9 @@ use std::{
     time::Duration,
 };
 
+use base64ct::{Base64UrlUnpadded, Encoding};
 use chrono::Utc;
+use hmac::{Hmac, Mac};
 use offf_access_service::grpc::offf_access_service_client::OfffAccessServiceClient;
 use offf_access_service::grpc::{
     AnalysisRow, AppendProvenanceEventRequest, GetChunkRequest, GetFileRequest, GetManifestRequest,
@@ -22,6 +24,7 @@ use offf_core::{
     },
 };
 use serde_json::json;
+use sha2::Sha256;
 use tempfile::tempdir;
 
 struct ChildGuard {
@@ -344,4 +347,114 @@ fn pick_free_port() -> Result<u16, std::io::Error> {
     let port = listener.local_addr()?.port();
     drop(listener);
     Ok(port)
+}
+
+/// Build a signed HMAC-HS256 token for test use.
+/// Format: `<base64url_json_payload>.<base64url_hmac_sig>`
+fn make_hmac_token(tool_id: &str, role: &str, secret: &[u8], exp_offset_secs: i64) -> String {
+    let exp = Utc::now().timestamp() + exp_offset_secs;
+    let payload = format!(r#"{{"tool_id":"{tool_id}","role":"{role}","exp":{exp}}}"#);
+    let payload_b64 = Base64UrlUnpadded::encode_string(payload.as_bytes());
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret).unwrap();
+    mac.update(payload_b64.as_bytes());
+    let sig = mac.finalize().into_bytes();
+    let sig_b64 = Base64UrlUnpadded::encode_string(&sig);
+    format!("{payload_b64}.{sig_b64}")
+}
+
+// T-04/T-03/T-09: Integration test — jwt auth mode accepts valid token and rejects invalid one
+#[tokio::test]
+async fn jwt_mode_valid_token_accepted_and_invalid_rejected() {
+    let tmp = tempdir().expect("tempdir");
+    let root = tmp.path().to_path_buf();
+
+    let fixture = build_case_fixture(&root).expect("build fixture");
+    let registry_path = root.join("tool-registry.json");
+    fs::write(
+        &registry_path,
+        r#"{
+    "tools": [
+        {
+            "tool_id": "jwt-test-tool",
+            "status": "approved",
+            "allowed_roles": ["analysis_worker"],
+            "write_layers": ["analysis", "provenance"]
+        }
+    ]
+}"#,
+    )
+    .expect("write registry fixture");
+
+    let jwt_secret = "test-integration-jwt-secret-key-2024";
+    let rest_port = pick_free_port().expect("rest port");
+    let grpc_port = pick_free_port().expect("grpc port");
+
+    let bin = env!("CARGO_BIN_EXE_offf-access-service");
+    let mut child = Command::new(bin)
+        .env("OFFF_CASES_ROOT", &root)
+        .env("OFFF_ACCESS_BIND", format!("127.0.0.1:{rest_port}"))
+        .env("OFFF_ACCESS_GRPC_BIND", format!("127.0.0.1:{grpc_port}"))
+        .env("OFFF_TOOL_REGISTRY", &registry_path)
+        .env("OFFF_AUTH_MODE", "jwt")
+        .env("OFFF_JWT_SECRET", jwt_secret)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn access service");
+
+    let endpoint = format!("http://127.0.0.1:{grpc_port}");
+    let mut client = {
+        let mut connected = None;
+        for _ in 0..40 {
+            if let Some(status) = child.try_wait().expect("try_wait") {
+                let mut stderr_text = String::new();
+                if let Some(mut stderr) = child.stderr.take() {
+                    let _ = stderr.read_to_string(&mut stderr_text);
+                }
+                panic!("access service (jwt) exited early with {status};\nstderr:\n{stderr_text}");
+            }
+            match OfffAccessServiceClient::connect(endpoint.clone()).await {
+                Ok(c) => { connected = Some(c); break; }
+                Err(_) => tokio::time::sleep(Duration::from_millis(150)).await,
+            }
+        }
+        connected.expect("gRPC server (jwt mode) did not become ready")
+    };
+
+    let _guard = ChildGuard { child };
+
+    // A valid signed token must pass auth on write endpoints (not return Unauthenticated).
+    let valid_token = make_hmac_token("jwt-test-tool", "analysis_worker", jwt_secret.as_bytes(), 3600);
+    let mut write_req = tonic::Request::new(WriteAnalysisResultsRequest {
+        case_id: fixture.case_id.clone(),
+        relative_path: "analysis/jobs/jwt-test-job/hits.jsonl".to_string(),
+        rows: vec![AnalysisRow { json: r#"{"k":"v"}"#.to_string() }],
+    });
+    write_req
+        .metadata_mut()
+        .insert("authorization", format!("Bearer {valid_token}").parse().unwrap());
+    let resp = client.write_analysis_results(write_req).await;
+    // Either success or a non-auth error (e.g. PermissionDenied from tool registry).
+    // It must NOT be Unauthenticated.
+    match &resp {
+        Ok(_) => {}
+        Err(s) => assert_ne!(
+            s.code(),
+            tonic::Code::Unauthenticated,
+            "valid JWT must not be rejected as unauthenticated; got: {s}"
+        ),
+    }
+
+    // An invalid (tampered) token must be rejected as Unauthenticated.
+    let bad_token = format!("{}.badsig_____", Base64UrlUnpadded::encode_string(b"fake payload"));
+    let mut bad_request = tonic::Request::new(WriteAnalysisResultsRequest {
+        case_id: fixture.case_id.clone(),
+        relative_path: "analysis/jobs/jwt-bad-job/hits.jsonl".to_string(),
+        rows: vec![AnalysisRow { json: r#"{"k":"v"}"#.to_string() }],
+    });
+    bad_request
+        .metadata_mut()
+        .insert("authorization", format!("Bearer {bad_token}").parse().unwrap());
+    let err = client.write_analysis_results(bad_request).await.expect_err("must reject invalid JWT");
+    assert_eq!(err.code(), tonic::Code::Unauthenticated, "expected Unauthenticated, got: {err}");
 }

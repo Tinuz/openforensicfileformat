@@ -6,10 +6,11 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+use base64ct::{Base64UrlUnpadded, Encoding};
 use clap::Parser;
-use uuid::Uuid;
-
+use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
+use uuid::Uuid;
 
 use offf_core::{
     chunk::write_chunk,
@@ -384,8 +385,21 @@ fn convert(args: Args) -> Result<()> {
 
         let manifest_json =
             serde_json::to_string_pretty(&manifest).context("failed to serialise manifest")?;
-        fs::write(base.join("manifest.json"), manifest_json)
+        fs::write(base.join("manifest.json"), manifest_json.as_bytes())
             .context("failed to write manifest.json")?;
+
+        // T-02: Write HMAC-SHA256 sidecar if OFFF_MANIFEST_HMAC_KEY is set.
+        if let Ok(key_raw) = std::env::var("OFFF_MANIFEST_HMAC_KEY") {
+            if !key_raw.is_empty() {
+                let mut mac = Hmac::<Sha256>::new_from_slice(key_raw.as_bytes())
+                    .context("invalid OFFF_MANIFEST_HMAC_KEY")?;
+                mac.update(manifest_json.as_bytes());
+                let sig = mac.finalize().into_bytes();
+                let sig_b64 = Base64UrlUnpadded::encode_string(&sig);
+                fs::write(base.join("manifest.hmac"), sig_b64.as_bytes())
+                    .context("failed to write manifest.hmac")?;
+            }
+        }
 
         // ── Phase 8: Self-check before publish ─────────────────────────────
         self_check_container(base).context("internal container self-check failed")?;
