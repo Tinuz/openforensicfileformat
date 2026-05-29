@@ -195,6 +195,21 @@ pub struct ObjectStorageRef {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObjectContentRef {
+    /// "filesystem_file" | "filesystem" | "evidence_object_store" | "derived_object_store"
+    #[serde(rename = "type")]
+    pub ref_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filesystem_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_index_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage_ref: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiscoveredObjectRow {
     pub object_id: String,
     pub object_type: String,
@@ -205,6 +220,11 @@ pub struct DiscoveredObjectRow {
     pub sha256: Option<String>,
     pub source_layer: String,
     pub storage_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_ref: Option<ObjectContentRef>,
+    /// "verified" | "deferred" | "unavailable" | "error"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_hash_status: Option<String>,
     /// Legacy field: kept for backward compat. Prefer `root_id` for new containers.
     pub root_source_ref: Option<String>,
     /// Root collection object_id this evidence object belongs to.

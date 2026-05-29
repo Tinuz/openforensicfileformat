@@ -321,6 +321,8 @@ mod tests {
             sha256: None,
             source_layer: "analysis".to_string(),
             storage_ref: None,
+            content_ref: None,
+            content_hash_status: None,
             root_source_ref: None,
             root_id: None,
             collection_relative_path: None,

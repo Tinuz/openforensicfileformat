@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     fs,
+    io::Write,
     path::{Path, PathBuf},
 };
 
@@ -8,18 +9,22 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 use offf_core::{
+    chunk::hex_sha256,
     lineage::{export_dot, export_lineage_json},
     ntfs::index_ntfs,
     parquet_io::{
         for_each_derivation_batch, for_each_edge_batch, for_each_object_batch,
-        read_derivations, read_object_edges, read_object_index, read_physical_to_chunk,
-        write_derivations, write_file_index, write_object_edges,
+        read_derivations, read_file_index, read_object_edges, read_object_index,
+        read_physical_to_chunk, write_derivations, write_file_index, write_object_edges,
         write_object_index,
     },
     partition::{detect_and_parse, detect_volume_type},
     provenance::ProvenanceWriter,
     rebuild_object_index_from_events,
-    types::{DerivationRow, DiscoveredObjectRow, ManifestJson, ObjectEdgeRow},
+    storage::read_file_verified,
+    types::{
+        DerivationRow, DiscoveredObjectRow, ManifestJson, ObjectContentRef, ObjectEdgeRow,
+    },
 };
 const TOOL_NAME: &str = "offf-index";
 const TOOL_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -57,6 +62,15 @@ enum Command {
     Objects {
         /// Path to the OFFF container directory
         container: PathBuf,
+        /// Build object graph directly from filesystem indexes under indexes/filesystems/
+        #[arg(long)]
+        from_filesystem: bool,
+        /// Hash mode for generated filesystem-backed objects: deferred|eager
+        #[arg(long, default_value = "deferred")]
+        hash_content: String,
+        /// Allow overwriting existing object graph files when output differs
+        #[arg(long)]
+        force: bool,
         /// When set, skip writing if indexes already exist (idempotent run)
         #[arg(long)]
         skip_existing: bool,
@@ -69,6 +83,17 @@ enum Command {
         /// instead of scanning job delta files.
         #[arg(long)]
         from_events: bool,
+    },
+    /// Run full index pipeline: partitions -> filesystem -> objects
+    Full {
+        /// Path to the OFFF container directory
+        container: PathBuf,
+        /// Hash mode passed to objects build: deferred|eager
+        #[arg(long, default_value = "deferred")]
+        hash_content: String,
+        /// Allow replacing existing object graph outputs when changed
+        #[arg(long)]
+        force: bool,
     },
     /// Export the object lineage graph as a self-contained offline report
     ExportLineage {
@@ -95,10 +120,26 @@ fn main() -> Result<()> {
         } => cmd_filesystem(&container, partition),
         Command::Objects {
             container,
+            from_filesystem,
+            hash_content,
+            force,
             skip_existing,
             batch_size,
             from_events,
-        } => cmd_objects(&container, skip_existing, batch_size, from_events),
+        } => cmd_objects(
+            &container,
+            from_filesystem,
+            &hash_content,
+            force,
+            skip_existing,
+            batch_size,
+            from_events,
+        ),
+        Command::Full {
+            container,
+            hash_content,
+            force,
+        } => cmd_full(&container, &hash_content, force),
         Command::ExportLineage {
             container,
             format,
@@ -376,6 +417,9 @@ fn resolve_partition(
 /// Job directories are sorted lexicographically to ensure reproducibility.
 fn cmd_objects(
     base: &Path,
+    from_filesystem: bool,
+    hash_content: &str,
+    force: bool,
     skip_existing: bool,
     batch_size: Option<usize>,
     from_events: bool,
@@ -393,6 +437,10 @@ fn cmd_objects(
     if skip_existing && idx_path.exists() && edges_path.exists() && deriv_path.exists() {
         println!("Indexes already present and --skip-existing set; nothing to do.");
         return Ok(());
+    }
+
+    if from_filesystem {
+        return cmd_objects_from_filesystem(base, hash_content, force);
     }
 
     // ── Event-log rebuild path ────────────────────────────────────────────
@@ -617,6 +665,475 @@ fn cmd_objects(
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HashContentMode {
+    Deferred,
+    Eager,
+}
+
+fn parse_hash_mode(s: &str) -> Result<HashContentMode> {
+    match s {
+        "deferred" => Ok(HashContentMode::Deferred),
+        "eager" => Ok(HashContentMode::Eager),
+        other => anyhow::bail!("invalid --hash-content '{other}' (expected deferred|eager)"),
+    }
+}
+
+fn cmd_full(base: &Path, hash_content: &str, force: bool) -> Result<()> {
+    cmd_partitions(base)?;
+
+    let table_raw = fs::read_to_string(base.join("indexes/partition_table.json"))
+        .context("partition_table.json missing after partitions step")?;
+    let table: offf_core::types::PartitionTableJson =
+        serde_json::from_str(&table_raw).context("invalid partition_table.json")?;
+
+    for p in &table.partitions {
+        if let Some(fs_ty) = &p.filesystem_type {
+            if fs_ty.to_uppercase() != "NTFS" {
+                println!(
+                    "Skipping partition {} (unsupported filesystem {})",
+                    p.partition_id, fs_ty
+                );
+                continue;
+            }
+        }
+        if let Err(e) = cmd_filesystem(base, Some(p.partition_id.clone())) {
+            println!(
+                "Warning: filesystem indexing failed for {}: {}",
+                p.partition_id, e
+            );
+        }
+    }
+
+    cmd_objects(base, true, hash_content, force, false, None, false)
+}
+
+fn cmd_objects_from_filesystem(base: &Path, hash_content: &str, force: bool) -> Result<()> {
+    let mode = parse_hash_mode(hash_content)?;
+
+    let manifest_raw = fs::read_to_string(base.join("manifest.json"))
+        .context("manifest.json not found – is this an OFFF container?")?;
+    let manifest: ManifestJson = serde_json::from_str(&manifest_raw).context("invalid manifest.json")?;
+
+    let filesystems_dir = base.join("indexes/filesystems");
+    if !filesystems_dir.exists() {
+        anyhow::bail!("indexes/filesystems not found; run 'offf-index filesystem' first");
+    }
+
+    let out_dir = base.join("indexes/objects");
+    let obj_jsonl = out_dir.join("object_index.jsonl");
+    let edge_jsonl = out_dir.join("object_edges.jsonl");
+    let drv_jsonl = out_dir.join("derivations.jsonl");
+    let obj_parquet = out_dir.join("object_index.parquet");
+    let edge_parquet = out_dir.join("object_edges.parquet");
+    let drv_parquet = out_dir.join("derivations.parquet");
+
+    let job_id = "job-object-index-from-filesystem".to_string();
+    let provenance_ref = "evt-object-index-from-filesystem".to_string();
+    let created_at = manifest.created_at.to_rfc3339();
+    let params_hash = format!("sha256:{}", hex_sha256(format!("hash_content={hash_content}").as_bytes()));
+
+    let mut object_map: HashMap<String, DiscoveredObjectRow> = HashMap::new();
+    let mut edge_map: HashMap<String, ObjectEdgeRow> = HashMap::new();
+    let mut deriv_map: HashMap<String, DerivationRow> = HashMap::new();
+
+    let mut fs_dirs: Vec<_> = fs::read_dir(&filesystems_dir)?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .collect();
+    fs_dirs.sort_by_key(|e| e.file_name());
+
+    for fs_dir in fs_dirs {
+        let fs_key = fs_dir.file_name().to_string_lossy().to_string();
+        let idx_path = fs_dir.path().join("file_index.parquet");
+        if !idx_path.exists() {
+            continue;
+        }
+
+        let parent_id = format!("obj-filesystem-{fs_key}");
+        object_map.insert(
+            parent_id.clone(),
+            DiscoveredObjectRow {
+                object_id: parent_id.clone(),
+                object_type: "filesystem".to_string(),
+                name: Some(fs_key.clone()),
+                logical_path: Some("/".to_string()),
+                media_type: None,
+                size_bytes: None,
+                sha256: None,
+                source_layer: "evidence".to_string(),
+                storage_ref: None,
+                content_ref: Some(ObjectContentRef {
+                    ref_type: "filesystem".to_string(),
+                    filesystem_id: Some(fs_key.clone()),
+                    file_id: None,
+                    file_index_path: Some(format!("indexes/filesystems/{fs_key}/file_index.parquet")),
+                    storage_ref: None,
+                }),
+                content_hash_status: None,
+                root_source_ref: None,
+                root_id: None,
+                collection_relative_path: None,
+                created_by_job_id: Some(job_id.clone()),
+                parser_status: "not_applicable".to_string(),
+                provenance_ref: Some(provenance_ref.clone()),
+                schema_version: "0.2.0".to_string(),
+                original_created_at: None,
+                original_modified_at: None,
+                original_accessed_at: None,
+            },
+        );
+
+        let rows = read_file_index(&idx_path)
+            .with_context(|| format!("failed to read {}", idx_path.display()))?;
+
+        for row in rows {
+            if row.is_directory || row.is_deleted {
+                continue;
+            }
+
+            let normalized_path = normalize_logical_path(&row.path);
+            let fid = format!("file-{:06}", row.file_id);
+            let object_id = deterministic_object_id(
+                &manifest.container_id,
+                &fs_key,
+                &fid,
+                &normalized_path,
+                row.size_bytes,
+            );
+
+            let (sha256, content_hash_status) = match mode {
+                HashContentMode::Deferred => (None, Some("deferred".to_string())),
+                HashContentMode::Eager => {
+                    let bytes = read_file_verified(base, &fs_key, &fid).with_context(|| {
+                        format!("unable to read filesystem-backed file '{}'", row.path)
+                    })?;
+                    (
+                        Some(format!("sha256:{}", hex_sha256(&bytes))),
+                        Some("verified".to_string()),
+                    )
+                }
+            };
+
+            object_map.insert(
+                object_id.clone(),
+                DiscoveredObjectRow {
+                    object_id: object_id.clone(),
+                    object_type: "filesystem_file".to_string(),
+                    name: Some(row.filename.clone()),
+                    logical_path: Some(normalized_path.clone()),
+                    media_type: None,
+                    size_bytes: Some(row.size_bytes),
+                    sha256,
+                    source_layer: "evidence".to_string(),
+                    storage_ref: None,
+                    content_ref: Some(ObjectContentRef {
+                        ref_type: "filesystem_file".to_string(),
+                        filesystem_id: Some(fs_key.clone()),
+                        file_id: Some(fid.clone()),
+                        file_index_path: Some(format!("indexes/filesystems/{fs_key}/file_index.parquet")),
+                        storage_ref: None,
+                    }),
+                    content_hash_status,
+                    root_source_ref: Some(parent_id.clone()),
+                    root_id: None,
+                    collection_relative_path: None,
+                    created_by_job_id: Some(job_id.clone()),
+                    parser_status: "not_parsed".to_string(),
+                    provenance_ref: Some(provenance_ref.clone()),
+                    schema_version: "0.2.0".to_string(),
+                    original_created_at: row.created_at.map(|d| d.to_rfc3339()),
+                    original_modified_at: row.modified_at.map(|d| d.to_rfc3339()),
+                    original_accessed_at: row.accessed_at.map(|d| d.to_rfc3339()),
+                },
+            );
+
+            let edge_id = deterministic_edge_id(&parent_id, &object_id);
+            edge_map.insert(
+                edge_id.clone(),
+                ObjectEdgeRow {
+                    edge_id,
+                    parent_object_id: parent_id.clone(),
+                    child_object_id: object_id.clone(),
+                    relation_type: "contains".to_string(),
+                    method: Some("filesystem_index_materialization".to_string()),
+                    logical_path: Some(normalized_path.clone()),
+                    sequence: None,
+                    created_by_job_id: Some(job_id.clone()),
+                    provenance_ref: Some(provenance_ref.clone()),
+                    schema_version: "0.2.0".to_string(),
+                },
+            );
+
+            let derivation_id = deterministic_derivation_id(&parent_id, &object_id);
+            deriv_map.insert(
+                derivation_id.clone(),
+                DerivationRow {
+                    derivation_id,
+                    parent_object_id: parent_id.clone(),
+                    child_object_id: object_id,
+                    job_id: job_id.clone(),
+                    method: "filesystem_index_materialization".to_string(),
+                    tool_id: TOOL_NAME.to_string(),
+                    tool_name: "OFFF Index".to_string(),
+                    tool_version: TOOL_VERSION.to_string(),
+                    parameters_hash: Some(params_hash.clone()),
+                    input_sha256: None,
+                    output_sha256: None,
+                    storage_mode: "referenced_only".to_string(),
+                    provenance_ref: Some(provenance_ref.clone()),
+                    created_at: created_at.clone(),
+                    schema_version: "0.2.0".to_string(),
+                },
+            );
+        }
+    }
+
+    let mut objects: Vec<DiscoveredObjectRow> = object_map.into_values().collect();
+    objects.sort_by(|a, b| a.object_id.cmp(&b.object_id));
+    let mut edges: Vec<ObjectEdgeRow> = edge_map.into_values().collect();
+    edges.sort_by(|a, b| a.edge_id.cmp(&b.edge_id));
+    let mut derivations: Vec<DerivationRow> = deriv_map.into_values().collect();
+    derivations.sort_by(|a, b| a.derivation_id.cmp(&b.derivation_id));
+
+    let object_json = render_object_jsonl(&objects)?;
+    let edge_json = render_edge_jsonl(&edges)?;
+    let deriv_json = render_derivation_jsonl(&derivations)?;
+
+    if !force {
+        assert_safe_rewrite(&obj_jsonl, &object_json, "object_index.jsonl")?;
+        assert_safe_rewrite(&edge_jsonl, &edge_json, "object_edges.jsonl")?;
+        assert_safe_rewrite(&drv_jsonl, &deriv_json, "derivations.jsonl")?;
+    }
+
+    fs::create_dir_all(&out_dir)?;
+    fs::write(&obj_jsonl, object_json)?;
+    fs::write(&edge_jsonl, edge_json)?;
+    fs::write(&drv_jsonl, deriv_json)?;
+    write_object_index(&obj_parquet, &objects)?;
+    write_object_edges(&edge_parquet, &edges)?;
+    write_derivations(&drv_parquet, &derivations)?;
+
+    println!("Container: {}", base.display());
+    println!("Mode: filesystem -> object graph ({hash_content})");
+    println!("Objects indexed:     {}", objects.len());
+    println!("Edges indexed:       {}", edges.len());
+    println!("Derivations indexed: {}", derivations.len());
+    println!("Written: {}", obj_jsonl.display());
+    println!("Written: {}", edge_jsonl.display());
+    println!("Written: {}", drv_jsonl.display());
+    println!("Written: {}", obj_parquet.display());
+    println!("Written: {}", edge_parquet.display());
+    println!("Written: {}", drv_parquet.display());
+
+    let prov_path = base.join("provenance/chain_of_custody.jsonl");
+    let mut prov = ProvenanceWriter::new(&prov_path).context("provenance writer failed")?;
+    prov.record(
+        "indexed_objects_from_filesystem",
+        TOOL_NAME,
+        TOOL_VERSION,
+        "system",
+        serde_json::json!({
+            "container": base.display().to_string(),
+            "hash_content": hash_content,
+            "objects_indexed": objects.len(),
+            "edges_indexed": edges.len(),
+            "derivations_indexed": derivations.len(),
+            "output": "indexes/objects/"
+        }),
+    )
+    .context("provenance write failed")?;
+
+    Ok(())
+}
+
+fn normalize_logical_path(raw: &str) -> String {
+    let replaced = raw.replace('\\', "/");
+    if replaced.starts_with('/') {
+        replaced
+    } else {
+        format!("/{replaced}")
+    }
+}
+
+fn deterministic_object_id(
+    container_id: &str,
+    filesystem_id: &str,
+    file_id: &str,
+    normalized_logical_path: &str,
+    size_bytes: u64,
+) -> String {
+    let material = format!(
+        "{container_id}|{filesystem_id}|{file_id}|{normalized_logical_path}|{size_bytes}"
+    );
+    let digest = hex_sha256(material.as_bytes());
+    format!("obj-fsfile-{}", &digest[..24])
+}
+
+fn deterministic_edge_id(parent_object_id: &str, child_object_id: &str) -> String {
+    let material = format!("{parent_object_id}|{child_object_id}|contains");
+    let digest = hex_sha256(material.as_bytes());
+    format!("edge-{}", &digest[..24])
+}
+
+fn deterministic_derivation_id(parent_object_id: &str, child_object_id: &str) -> String {
+    let material =
+        format!("{parent_object_id}|{child_object_id}|filesystem_index_materialization");
+    let digest = hex_sha256(material.as_bytes());
+    format!("drv-{}", &digest[..24])
+}
+
+fn assert_safe_rewrite(path: &Path, new_content: &str, label: &str) -> Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let old = fs::read_to_string(path)?;
+    if old == new_content {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "{} differs from existing output; rerun with --force to replace {}",
+        label,
+        path.display()
+    );
+}
+
+fn render_object_jsonl(rows: &[DiscoveredObjectRow]) -> Result<String> {
+    let mut out = String::new();
+    for row in rows {
+        let mut map = serde_json::Map::new();
+        map.insert("object_id".to_string(), serde_json::Value::String(row.object_id.clone()));
+        map.insert("object_type".to_string(), serde_json::Value::String(row.object_type.clone()));
+        map.insert(
+            "name".to_string(),
+            row.name
+                .clone()
+                .map(serde_json::Value::String)
+                .unwrap_or(serde_json::Value::Null),
+        );
+        map.insert(
+            "logical_path".to_string(),
+            row.logical_path
+                .clone()
+                .map(serde_json::Value::String)
+                .unwrap_or(serde_json::Value::Null),
+        );
+        map.insert(
+            "media_type".to_string(),
+            row.media_type
+                .clone()
+                .map(serde_json::Value::String)
+                .unwrap_or(serde_json::Value::Null),
+        );
+        map.insert(
+            "size_bytes".to_string(),
+            row.size_bytes
+                .map(|v| serde_json::Value::Number(v.into()))
+                .unwrap_or(serde_json::Value::Null),
+        );
+        map.insert(
+            "sha256".to_string(),
+            row.sha256
+                .clone()
+                .map(serde_json::Value::String)
+                .unwrap_or(serde_json::Value::Null),
+        );
+        map.insert(
+            "content_hash_status".to_string(),
+            row.content_hash_status
+                .clone()
+                .map(serde_json::Value::String)
+                .unwrap_or(serde_json::Value::Null),
+        );
+        map.insert("source_layer".to_string(), serde_json::Value::String(row.source_layer.clone()));
+        map.insert(
+            "content_ref".to_string(),
+            row.content_ref
+                .as_ref()
+                .and_then(|v| serde_json::to_value(v).ok())
+                .unwrap_or(serde_json::Value::Null),
+        );
+        map.insert(
+            "storage_ref".to_string(),
+            row.storage_ref
+                .clone()
+                .map(serde_json::Value::String)
+                .unwrap_or(serde_json::Value::Null),
+        );
+        map.insert(
+            "parser_status".to_string(),
+            serde_json::Value::String(row.parser_status.clone()),
+        );
+        map.insert(
+            "created_by_job_id".to_string(),
+            row.created_by_job_id
+                .clone()
+                .map(serde_json::Value::String)
+                .unwrap_or(serde_json::Value::Null),
+        );
+        map.insert(
+            "provenance_ref".to_string(),
+            row.provenance_ref
+                .clone()
+                .map(serde_json::Value::String)
+                .unwrap_or(serde_json::Value::Null),
+        );
+        map.insert(
+            "schema_version".to_string(),
+            serde_json::Value::String(row.schema_version.clone()),
+        );
+        out.push_str(&serde_json::to_string(&serde_json::Value::Object(map))?);
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+fn render_edge_jsonl(rows: &[ObjectEdgeRow]) -> Result<String> {
+    let mut out = String::new();
+    for row in rows {
+        let v = serde_json::json!({
+            "edge_id": row.edge_id,
+            "parent_object_id": row.parent_object_id,
+            "child_object_id": row.child_object_id,
+            "relation_type": row.relation_type,
+            "method": row.method,
+            "logical_path": row.logical_path,
+            "created_by_job_id": row.created_by_job_id,
+            "provenance_ref": row.provenance_ref,
+            "schema_version": row.schema_version
+        });
+        out.push_str(&serde_json::to_string(&v)?);
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+fn render_derivation_jsonl(rows: &[DerivationRow]) -> Result<String> {
+    let mut out = String::new();
+    for row in rows {
+        let v = serde_json::json!({
+            "derivation_id": row.derivation_id,
+            "parent_object_id": row.parent_object_id,
+            "child_object_id": row.child_object_id,
+            "job_id": row.job_id,
+            "method": row.method,
+            "tool_id": row.tool_id,
+            "tool_name": row.tool_name,
+            "tool_version": row.tool_version,
+            "parameters_hash": row.parameters_hash,
+            "input_sha256": row.input_sha256,
+            "output_sha256": row.output_sha256,
+            "storage_mode": row.storage_mode,
+            "provenance_ref": row.provenance_ref,
+            "created_at": row.created_at,
+            "schema_version": row.schema_version
+        });
+        out.push_str(&serde_json::to_string(&v)?);
+        out.push('\n');
+    }
+    Ok(out)
+}
+
 // ── Streaming merge helpers ───────────────────────────────────────────────────
 
 /// Merge existing `object_index.parquet` into `map` using streaming batch
@@ -774,6 +1291,52 @@ fn csv_escape(s: &str) -> String {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{
+        deterministic_derivation_id, deterministic_edge_id, deterministic_object_id,
+        normalize_logical_path,
+    };
+
+    #[test]
+    fn object_id_is_deterministic() {
+        let a = deterministic_object_id(
+            "urn:offf:case:1",
+            "volume-1",
+            "file-000123",
+            "/Users/a/test.txt",
+            12,
+        );
+        let b = deterministic_object_id(
+            "urn:offf:case:1",
+            "volume-1",
+            "file-000123",
+            "/Users/a/test.txt",
+            12,
+        );
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn edge_and_derivation_ids_are_deterministic() {
+        let parent = "obj-filesystem-volume-1";
+        let child = "obj-fsfile-abc";
+        assert_eq!(
+            deterministic_edge_id(parent, child),
+            deterministic_edge_id(parent, child)
+        );
+        assert_eq!(
+            deterministic_derivation_id(parent, child),
+            deterministic_derivation_id(parent, child)
+        );
+    }
+
+    #[test]
+    fn normalize_logical_path_is_stable() {
+        assert_eq!(normalize_logical_path("a\\b\\c.txt"), "/a/b/c.txt");
+        assert_eq!(normalize_logical_path("/a/b/c.txt"), "/a/b/c.txt");
+    }
+}
+
 // Bring streaming helpers into scope (re-exported from offf_core via pub use,
 // but we need the un-prefixed names used above).
-use std::io::Write;

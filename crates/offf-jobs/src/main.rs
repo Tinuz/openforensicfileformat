@@ -664,25 +664,43 @@ fn run_worker_task(
     job_path: &Path,
     worker_id: &str,
 ) -> Result<RunOutcome> {
-    let package = match task {
-        "keyword_scan" => "offf-keyword-worker",
-        "yara_scan" => "offf-yara-worker",
+    let output = match task {
+        "keyword_scan" | "yara_scan" => {
+            let package = if task == "keyword_scan" {
+                "offf-keyword-worker"
+            } else {
+                "offf-yara-worker"
+            };
+            ProcessCommand::new("cargo")
+                .arg("run")
+                .arg("-p")
+                .arg(package)
+                .arg("--")
+                .arg("--case")
+                .arg(case)
+                .arg("--job")
+                .arg(job_path)
+                .arg("--worker-id")
+                .arg(worker_id)
+                .output()
+                .with_context(|| format!("failed to spawn worker package {package}"))?
+        }
+        "build_object_graph_from_filesystem" | "object_graph_build" => {
+            ProcessCommand::new("cargo")
+                .arg("run")
+                .arg("-p")
+                .arg("offf-index")
+                .arg("--")
+                .arg("objects")
+                .arg(case)
+                .arg("--from-filesystem")
+                .arg("--hash-content")
+                .arg("deferred")
+                .output()
+                .context("failed to spawn offf-index for object graph build")?
+        }
         other => anyhow::bail!("unsupported job task for runner: {other}"),
     };
-
-    let output = ProcessCommand::new("cargo")
-        .arg("run")
-        .arg("-p")
-        .arg(package)
-        .arg("--")
-        .arg("--case")
-        .arg(case)
-        .arg("--job")
-        .arg(job_path)
-        .arg("--worker-id")
-        .arg(worker_id)
-        .output()
-        .with_context(|| format!("failed to spawn worker package {package}"))?;
 
     if output.status.success() {
         return Ok(RunOutcome {

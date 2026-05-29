@@ -1,5 +1,7 @@
 use std::{fs, path::Path, sync::Arc};
 
+use chrono::{DateTime, Utc};
+
 use arrow::{
     array::{Array, ArrayRef, BooleanArray, StringArray, UInt64Array},
     datatypes::{DataType, Field, Schema},
@@ -15,6 +17,7 @@ use crate::{
     error::OfffError,
     types::{
         ChunkMetadata, DerivationRow, DiscoveredObjectRow, FileIndexRow, KeywordHitRow,
+        ObjectContentRef,
         ObjectEdgeRow, YaraHitRow,
     },
 };
@@ -327,6 +330,98 @@ pub fn write_file_index(path: &Path, rows: &[FileIndexRow]) -> Result<(), OfffEr
     Ok(())
 }
 
+/// Read all rows from file_index.parquet.
+pub fn read_file_index(path: &Path) -> Result<Vec<FileIndexRow>, OfffError> {
+    let file = fs::File::open(path)?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+    let reader = builder.build()?;
+
+    fn parse_dt(v: Option<String>) -> Option<DateTime<Utc>> {
+        v.and_then(|s| {
+            if s.trim().is_empty() {
+                None
+            } else {
+                chrono::DateTime::parse_from_rfc3339(&s)
+                    .ok()
+                    .map(|d| d.with_timezone(&Utc))
+            }
+        })
+    }
+
+    let mut rows = Vec::new();
+    for batch in reader {
+        let batch = batch?;
+        let n = batch.num_rows();
+
+        let file_id = as_u64_col(&batch, "file_id")?;
+        let filesystem_id = as_str_col(&batch, "filesystem_id")?;
+        let partition_id = as_str_col(&batch, "partition_id")?;
+        let path_col = as_str_col(&batch, "path")?;
+        let filename = as_str_col(&batch, "filename")?;
+        let extension = as_str_col(&batch, "extension")?;
+        let size_bytes = as_u64_col(&batch, "size_bytes")?;
+        let created_at = as_str_col(&batch, "created_at")?;
+        let modified_at = as_str_col(&batch, "modified_at")?;
+        let accessed_at = as_str_col(&batch, "accessed_at")?;
+        let changed_at = as_str_col(&batch, "changed_at")?;
+        let physical_extents = as_str_col(&batch, "physical_extents")?;
+        let chunk_refs = as_str_col(&batch, "chunk_refs")?;
+        let is_directory = batch
+            .column_by_name("is_directory")
+            .and_then(|c| c.as_any().downcast_ref::<BooleanArray>());
+        let is_deleted = batch
+            .column_by_name("is_deleted")
+            .and_then(|c| c.as_any().downcast_ref::<BooleanArray>());
+        let is_sparse = batch
+            .column_by_name("is_sparse")
+            .and_then(|c| c.as_any().downcast_ref::<BooleanArray>());
+        let is_compressed = batch
+            .column_by_name("is_compressed")
+            .and_then(|c| c.as_any().downcast_ref::<BooleanArray>());
+        let is_encrypted = batch
+            .column_by_name("is_encrypted")
+            .and_then(|c| c.as_any().downcast_ref::<BooleanArray>());
+        let ads_streams = as_str_col(&batch, "ads_streams").ok();
+        let parser = as_str_col(&batch, "parser")?;
+        let parser_version = as_str_col(&batch, "parser_version")?;
+        let parser_status = as_str_col(&batch, "parser_status")?;
+        let parser_error = as_str_col(&batch, "parser_error")?;
+
+        for i in 0..n {
+            rows.push(FileIndexRow {
+                file_id: file_id.value(i),
+                filesystem_id: filesystem_id.value(i).to_string(),
+                partition_id: partition_id.value(i).to_string(),
+                path: path_col.value(i).to_string(),
+                filename: filename.value(i).to_string(),
+                extension: extension.value(i).to_string(),
+                size_bytes: size_bytes.value(i),
+                created_at: parse_dt(str_value_or_none(created_at, i)),
+                modified_at: parse_dt(str_value_or_none(modified_at, i)),
+                accessed_at: parse_dt(str_value_or_none(accessed_at, i)),
+                changed_at: parse_dt(str_value_or_none(changed_at, i)),
+                physical_extents: physical_extents.value(i).to_string(),
+                chunk_refs: chunk_refs.value(i).to_string(),
+                is_directory: is_directory.map(|c| c.value(i)).unwrap_or(false),
+                is_deleted: is_deleted.map(|c| c.value(i)).unwrap_or(false),
+                is_sparse: is_sparse.map(|c| c.value(i)).unwrap_or(false),
+                is_compressed: is_compressed.map(|c| c.value(i)).unwrap_or(false),
+                is_encrypted: is_encrypted.map(|c| c.value(i)).unwrap_or(false),
+                ads_streams: ads_streams
+                    .as_ref()
+                    .and_then(|c| str_value_or_none(c, i))
+                    .unwrap_or_else(|| "[]".to_string()),
+                parser: parser.value(i).to_string(),
+                parser_version: parser_version.value(i).to_string(),
+                parser_status: parser_status.value(i).to_string(),
+                parser_error: parser_error.value(i).to_string(),
+            });
+        }
+    }
+
+    Ok(rows)
+}
+
 /// Read the minimal fields needed for file_id resolution from file_index.parquet.
 ///
 /// Returns a vec of `(file_id, chunk_refs_json)` pairs.  The `chunk_refs_json`
@@ -499,6 +594,8 @@ pub fn write_object_index(path: &Path, rows: &[DiscoveredObjectRow]) -> Result<(
         Field::new("sha256", DataType::Utf8, true),
         Field::new("source_layer", DataType::Utf8, false),
         Field::new("storage_ref", DataType::Utf8, true),
+        Field::new("content_ref", DataType::Utf8, true),
+        Field::new("content_hash_status", DataType::Utf8, true),
         Field::new("root_source_ref", DataType::Utf8, true),
         Field::new("root_id", DataType::Utf8, true),
         Field::new("collection_relative_path", DataType::Utf8, true),
@@ -538,6 +635,14 @@ pub fn write_object_index(path: &Path, rows: &[DiscoveredObjectRow]) -> Result<(
             )) as ArrayRef,
             Arc::new(StringArray::from_iter(
                 rows.iter().map(|r| r.storage_ref.as_deref()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter(rows.iter().map(|r| {
+                r.content_ref
+                    .as_ref()
+                    .and_then(|v| serde_json::to_string(v).ok())
+            }))) as ArrayRef,
+            Arc::new(StringArray::from_iter(
+                rows.iter().map(|r| r.content_hash_status.as_deref()),
             )) as ArrayRef,
             Arc::new(StringArray::from_iter(
                 rows.iter().map(|r| r.root_source_ref.as_deref()),
@@ -594,6 +699,8 @@ pub fn read_object_index(path: &Path) -> Result<Vec<DiscoveredObjectRow>, OfffEr
         let sha256 = as_str_col(&batch, "sha256")?;
         let source_layer = as_str_col(&batch, "source_layer")?;
         let storage_ref = as_str_col(&batch, "storage_ref")?;
+        let content_ref = as_str_col(&batch, "content_ref").ok();
+        let content_hash_status = as_str_col(&batch, "content_hash_status").ok();
         let root_source_ref = as_str_col(&batch, "root_source_ref")?;
         // New nullable columns (absent in old parquet files → None)
         let root_id = as_str_col(&batch, "root_id").ok();
@@ -617,6 +724,13 @@ pub fn read_object_index(path: &Path) -> Result<Vec<DiscoveredObjectRow>, OfffEr
                 sha256: str_value_or_none(sha256, i),
                 source_layer: source_layer.value(i).to_string(),
                 storage_ref: str_value_or_none(storage_ref, i),
+                content_ref: content_ref
+                    .as_ref()
+                    .and_then(|c| str_value_or_none(c, i))
+                    .and_then(|s| serde_json::from_str::<ObjectContentRef>(&s).ok()),
+                content_hash_status: content_hash_status
+                    .as_ref()
+                    .and_then(|c| str_value_or_none(c, i)),
                 root_source_ref: str_value_or_none(root_source_ref, i),
                 root_id: root_id.as_ref().and_then(|c| str_value_or_none(c, i)),
                 collection_relative_path: collection_relative_path.as_ref().and_then(|c| str_value_or_none(c, i)),
@@ -888,6 +1002,8 @@ pub fn for_each_object_batch(
         let sha256 = as_str_col(&batch, "sha256")?;
         let source_layer = as_str_col(&batch, "source_layer")?;
         let storage_ref = as_str_col(&batch, "storage_ref")?;
+        let content_ref = as_str_col(&batch, "content_ref").ok();
+        let content_hash_status = as_str_col(&batch, "content_hash_status").ok();
         let root_source_ref = as_str_col(&batch, "root_source_ref")?;
         let root_id = as_str_col(&batch, "root_id").ok();
         let collection_relative_path = as_str_col(&batch, "collection_relative_path").ok();
@@ -910,6 +1026,13 @@ pub fn for_each_object_batch(
                 sha256: str_value_or_none(sha256, i),
                 source_layer: source_layer.value(i).to_string(),
                 storage_ref: str_value_or_none(storage_ref, i),
+                content_ref: content_ref
+                    .as_ref()
+                    .and_then(|c| str_value_or_none(c, i))
+                    .and_then(|s| serde_json::from_str::<ObjectContentRef>(&s).ok()),
+                content_hash_status: content_hash_status
+                    .as_ref()
+                    .and_then(|c| str_value_or_none(c, i)),
                 root_source_ref: str_value_or_none(root_source_ref, i),
                 root_id: root_id.as_ref().and_then(|c| str_value_or_none(c, i)),
                 collection_relative_path: collection_relative_path.as_ref().and_then(|c| str_value_or_none(c, i)),
@@ -1047,11 +1170,18 @@ pub fn write_object_index_batched(
         Field::new("sha256", DataType::Utf8, true),
         Field::new("source_layer", DataType::Utf8, false),
         Field::new("storage_ref", DataType::Utf8, true),
+        Field::new("content_ref", DataType::Utf8, true),
+        Field::new("content_hash_status", DataType::Utf8, true),
         Field::new("root_source_ref", DataType::Utf8, true),
+        Field::new("root_id", DataType::Utf8, true),
+        Field::new("collection_relative_path", DataType::Utf8, true),
         Field::new("created_by_job_id", DataType::Utf8, true),
         Field::new("parser_status", DataType::Utf8, false),
         Field::new("provenance_ref", DataType::Utf8, true),
         Field::new("schema_version", DataType::Utf8, false),
+        Field::new("original_created_at", DataType::Utf8, true),
+        Field::new("original_modified_at", DataType::Utf8, true),
+        Field::new("original_accessed_at", DataType::Utf8, true),
     ]));
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -1091,8 +1221,22 @@ pub fn write_object_index_batched(
                 Arc::new(StringArray::from_iter(
                     rows.iter().map(|r| r.storage_ref.as_deref()),
                 )) as ArrayRef,
+                Arc::new(StringArray::from_iter(rows.iter().map(|r| {
+                    r.content_ref
+                        .as_ref()
+                        .and_then(|v| serde_json::to_string(v).ok())
+                }))) as ArrayRef,
+                Arc::new(StringArray::from_iter(
+                    rows.iter().map(|r| r.content_hash_status.as_deref()),
+                )) as ArrayRef,
                 Arc::new(StringArray::from_iter(
                     rows.iter().map(|r| r.root_source_ref.as_deref()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter(
+                    rows.iter().map(|r| r.root_id.as_deref()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter(
+                    rows.iter().map(|r| r.collection_relative_path.as_deref()),
                 )) as ArrayRef,
                 Arc::new(StringArray::from_iter(
                     rows.iter().map(|r| r.created_by_job_id.as_deref()),
@@ -1105,6 +1249,15 @@ pub fn write_object_index_batched(
                 )) as ArrayRef,
                 Arc::new(StringArray::from_iter_values(
                     rows.iter().map(|r| r.schema_version.as_str()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter(
+                    rows.iter().map(|r| r.original_created_at.as_deref()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter(
+                    rows.iter().map(|r| r.original_modified_at.as_deref()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter(
+                    rows.iter().map(|r| r.original_accessed_at.as_deref()),
                 )) as ArrayRef,
             ],
         )?;

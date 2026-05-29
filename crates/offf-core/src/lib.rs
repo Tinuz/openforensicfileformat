@@ -35,6 +35,7 @@ pub use parquet_io::{
 pub use types::{
     AccessEvent, AuditEvent, DateRange, DecisionActor, DecisionRecord, DerivationRow,
     DeniedAccessEvent, DiscoveredObjectRow, ExtensionTarget, LabelEvent, ManifestExtensions,
+    ObjectContentRef,
     ObjectEdgeEvent, ObjectEdgeRow, ObjectEvent, PolicyRef, ScopeExclude, ScopeInclude,
     ScopeRecord, SetMembers, SetRecord,
     // Parallel processing types

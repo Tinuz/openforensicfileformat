@@ -7,7 +7,11 @@
   "required": [
     "object_id",
     "object_type",
+    "name",
+    "logical_path",
+    "size_bytes",
     "source_layer",
+    "content_ref",
     "parser_status",
     "schema_version"
   ],
@@ -24,16 +28,45 @@
     },
     "source_layer": {
       "type": "string",
-      "enum": ["evidence", "derived_object", "analysis"]
+      "enum": ["evidence", "derived_object", "analysis", "collection"]
+    },
+    "content_ref": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "filesystem_file",
+            "filesystem",
+            "evidence_object_store",
+            "derived_object_store"
+          ]
+        },
+        "filesystem_id": { "type": ["string", "null"] },
+        "file_id": { "type": ["string", "null"] },
+        "file_index_path": { "type": ["string", "null"] },
+        "storage_ref": { "type": ["string", "null"] }
+      }
+    },
+    "content_hash_status": {
+      "type": ["string", "null"],
+      "enum": ["verified", "deferred", "unavailable", "error", null]
     },
     "storage_ref": { "type": ["string", "null"] },
     "root_source_ref": { "type": ["string", "null"] },
+    "root_id": { "type": ["string", "null"] },
+    "collection_relative_path": { "type": ["string", "null"] },
     "created_by_job_id": { "type": ["string", "null"], "minLength": 1 },
     "parser_status": {
       "type": "string",
-      "enum": ["success", "partial", "error", "unknown"]
+      "enum": ["success", "ok", "partial", "error", "unknown", "not_parsed", "not_applicable"]
     },
     "provenance_ref": { "type": ["string", "null"], "minLength": 1 },
-    "schema_version": { "type": "string", "const": "0.2.0" }
+    "schema_version": { "type": "string", "const": "0.2.0" },
+    "original_created_at": { "type": ["string", "null"], "format": "date-time" },
+    "original_modified_at": { "type": ["string", "null"], "format": "date-time" },
+    "original_accessed_at": { "type": ["string", "null"], "format": "date-time" }
   }
 }

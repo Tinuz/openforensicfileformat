@@ -22,7 +22,10 @@ use offf_core::{
     },
     scope::{compute_input_scope_hash, resolve_analysis_scope},
     shard::{read_shard_manifest, read_shard_plan, read_shard_result_manifest, validate_parallel_job, ShardValidationIssueKind},
-    storage::{derived_object_path, read_chunk_verified, ContainerRef},
+    storage::{
+        derived_object_path, read_chunk_verified, read_file_verified, read_object_verified,
+        ContainerRef,
+    },
     types::{AcquisitionJson, AcquisitionMode, ManifestJson, OFFF_V2_VERSION, OFFF_VERSION},
 };
 
@@ -93,12 +96,17 @@ struct Args {
     /// Print coverage report for a parallel analysis job (by job_id) and exit.
     #[arg(long)]
     coverage: Option<String>,
+
+    /// For --profile objects: verify object bytes and compare hashes when sha256 is present.
+    #[arg(long)]
+    validate_content_hashes: bool,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 enum VerifyProfile {
     Core,
+    Objects,
     #[value(name = "core+schemas")]
     CoreSchemas,
     #[value(name = "core+extensions")]
@@ -249,6 +257,7 @@ fn main() -> Result<()> {
         args.chunks.as_deref(),
         args.proof_chunk.as_deref(),
         args.profile,
+        args.validate_content_hashes,
         json_path.as_deref(),
         md_path.as_deref(),
     )?;
@@ -485,6 +494,7 @@ fn verify(
     subset_arg: Option<&str>,
     proof_chunk_arg: Option<&str>,
     profile: VerifyProfile,
+    validate_content_hashes: bool,
     report_path: Option<&std::path::Path>,
     report_md_path: Option<&std::path::Path>,
 ) -> Result<bool> {
@@ -579,6 +589,17 @@ fn verify(
             return Ok(false);
         }
     };
+
+    if profile == VerifyProfile::Objects {
+        return verify_objects_profile(
+            &container,
+            &manifest,
+            validate_content_hashes,
+            &mut report,
+            report_path,
+            report_md_path,
+        );
+    }
 
     // ── Check 2: OFFF version ──────────────────────────────────────────────
     let is_v2 = manifest.offf_version == OFFF_V2_VERSION;
@@ -1011,6 +1032,213 @@ fn includes_schemas(profile: VerifyProfile) -> bool {
         profile,
         VerifyProfile::CoreSchemas | VerifyProfile::CoreExtensions | VerifyProfile::Conformance
     )
+}
+
+fn verify_objects_profile(
+    container: &ContainerRef,
+    _manifest: &ManifestJson,
+    validate_content_hashes: bool,
+    report: &mut VerifyReport,
+    report_path: Option<&std::path::Path>,
+    report_md_path: Option<&std::path::Path>,
+) -> Result<bool> {
+    let base = match container {
+        ContainerRef::Local(p) => p.clone(),
+        ContainerRef::S3 { .. } => {
+            report.fail(
+                "Objects profile",
+                "S3 object profile validation is not implemented",
+            );
+            let valid = report.is_valid();
+            if let Some(path) = report_path {
+                write_json_report(path, report, valid)?;
+            }
+            if let Some(path) = report_md_path {
+                write_md_report(path, report, valid)?;
+            }
+            report.print();
+            return Ok(valid);
+        }
+    };
+
+    let oi = base.join("indexes/objects/object_index.parquet");
+    let oe = base.join("indexes/objects/object_edges.parquet");
+    let dv = base.join("indexes/objects/derivations.parquet");
+
+    if oi.exists() {
+        report.ok("object_index exists");
+    } else {
+        report.fail("object_index exists", "indexes/objects/object_index.parquet missing");
+    }
+    if oe.exists() {
+        report.ok("object_edges exists");
+    } else {
+        report.fail("object_edges exists", "indexes/objects/object_edges.parquet missing");
+    }
+    if dv.exists() {
+        report.ok("derivations exists");
+    } else {
+        report.fail("derivations exists", "indexes/objects/derivations.parquet missing");
+    }
+
+    let objects = read_object_index(&oi).unwrap_or_default();
+    let edges = read_object_edges(&oe).unwrap_or_default();
+    let derivations = read_derivations(&dv).unwrap_or_default();
+
+    let object_ids: HashSet<String> = objects.iter().map(|o| o.object_id.clone()).collect();
+
+    let mut valid_status = true;
+    for row in &objects {
+        if let Some(st) = row.content_hash_status.as_deref() {
+            let ok = matches!(st, "verified" | "deferred" | "unavailable" | "error");
+            if !ok {
+                valid_status = false;
+                report.fail(
+                    "content_hash_status enum",
+                    format!("object {} has invalid content_hash_status '{st}'", row.object_id),
+                );
+            }
+        }
+    }
+    if valid_status {
+        report.ok("content_hash_status enum valid");
+    }
+
+    let mut filesystem_objects_missing_parent = 0usize;
+    for row in &objects {
+        if row.object_type != "filesystem_file" {
+            continue;
+        }
+
+        if row.storage_ref.is_some() {
+            report.fail(
+                "filesystem-backed storage_ref",
+                format!("object {} has storage_ref but must be referenced_only", row.object_id),
+            );
+        }
+
+        let cref = match &row.content_ref {
+            Some(c) => c,
+            None => {
+                report.fail(
+                    "filesystem content_ref",
+                    format!("object {} missing content_ref", row.object_id),
+                );
+                continue;
+            }
+        };
+
+        if cref.ref_type != "filesystem_file" {
+            report.fail(
+                "filesystem content_ref type",
+                format!("object {} has content_ref type '{}', expected filesystem_file", row.object_id, cref.ref_type),
+            );
+            continue;
+        }
+
+        let fsid = match cref.filesystem_id.as_deref() {
+            Some(v) => v,
+            None => {
+                report.fail(
+                    "filesystem content_ref fields",
+                    format!("object {} missing filesystem_id", row.object_id),
+                );
+                continue;
+            }
+        };
+        let file_id = match cref.file_id.as_deref() {
+            Some(v) => v,
+            None => {
+                report.fail(
+                    "filesystem content_ref fields",
+                    format!("object {} missing file_id", row.object_id),
+                );
+                continue;
+            }
+        };
+
+        if read_file_verified(&base, fsid, file_id).is_err() {
+            report.fail(
+                "filesystem content_ref resolvable",
+                format!("object {} points to missing file {} in {}", row.object_id, file_id, fsid),
+            );
+        }
+
+        let has_parent = edges.iter().any(|e| {
+            e.child_object_id == row.object_id && e.relation_type == "contains"
+        });
+        if !has_parent {
+            filesystem_objects_missing_parent += 1;
+        }
+    }
+
+    if filesystem_objects_missing_parent == 0 {
+        report.ok("filesystem file parent edges present");
+    } else {
+        report.fail(
+            "filesystem file parent edges",
+            format!("{filesystem_objects_missing_parent} filesystem_file objects missing contains parent edge"),
+        );
+    }
+
+    let mut missing_edge_refs = 0usize;
+    for edge in &edges {
+        if !object_ids.contains(&edge.parent_object_id) || !object_ids.contains(&edge.child_object_id)
+        {
+            missing_edge_refs += 1;
+            report.fail(
+                "edge object references",
+                format!("edge {} references missing parent/child", edge.edge_id),
+            );
+        }
+    }
+    if missing_edge_refs == 0 {
+        report.ok("edge object references valid");
+    }
+
+    let mut missing_drv_refs = 0usize;
+    for d in &derivations {
+        if !object_ids.contains(&d.parent_object_id) || !object_ids.contains(&d.child_object_id) {
+            missing_drv_refs += 1;
+            report.fail(
+                "derivation object references",
+                format!("derivation {} references missing parent/child", d.derivation_id),
+            );
+        }
+    }
+    if missing_drv_refs == 0 {
+        report.ok("derivation object references valid");
+    }
+
+    if validate_content_hashes {
+        for row in &objects {
+            if row.sha256.is_none() {
+                if row.content_hash_status.as_deref() == Some("deferred") {
+                    report.warn(
+                        "deferred object hash",
+                        format!("object {} has deferred hash", row.object_id),
+                    );
+                }
+                continue;
+            }
+            if let Err(e) = read_object_verified(&base, &row.object_id) {
+                report.fail(
+                    "object content hash validation",
+                    format!("object {} failed verified read: {e}", row.object_id),
+                );
+            }
+        }
+    }
+
+    let valid = report.is_valid();
+    if let Some(path) = report_path {
+        write_json_report(path, report, valid)?;
+    }
+    if let Some(path) = report_md_path {
+        write_md_report(path, report, valid)?;
+    }
+    report.print();
+    Ok(valid)
 }
 
 // ── File-collection container verification ────────────────────────────────────

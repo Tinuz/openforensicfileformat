@@ -9,6 +9,12 @@ Index output wordt geschreven onder `indexes/` in de container, inclusief file i
 ## Voorbeeld
 ```bash
 cargo run -p offf-index -- --help
+
+# Build object graph from filesystem indexes
+cargo run -p offf-index -- objects case.offf --from-filesystem
+
+# Full pipeline: partitions -> filesystem -> objects
+cargo run -p offf-index -- full case.offf --hash-content deferred
 ```
 
 ## Richtlijnen

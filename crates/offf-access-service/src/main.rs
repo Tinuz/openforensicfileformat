@@ -19,7 +19,10 @@ use chrono::Utc;
 use offf_core::{
     chunk::hex_sha256,
     parquet_io::read_physical_to_chunk_bytes,
-    storage::{read_chunk_verified, read_derived_object, write_derived_object, ContainerRef},
+    storage::{
+        read_chunk_verified, read_derived_object, read_file_verified, read_object_verified,
+        write_derived_object, ContainerRef,
+    },
     types::{ChunkMetadata, ManifestJson, ToolInfo},
 };
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -164,6 +167,10 @@ enum AuthError {
 }
 
 const DENIED_WRITES_REL: &str = "extensions/access/denied_access_events.jsonl";
+const ACCESS_EVENTS_REL: &str = "extensions/access/access_events.jsonl";
+const ACCESS_DENIED_REL: &str = "extensions/access/denied_access_events.jsonl";
+const ACCESS_TOOL_NAME: &str = "offf-access-service";
+const ACCESS_TOOL_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Clone, Copy)]
 enum WriteLayer {
@@ -344,6 +351,10 @@ async fn main() -> Result<()> {
         .route(
             "/cases/{case_id}/objects/{object_id}/content",
             get(rest_get_object_content),
+        )
+        .route(
+            "/cases/{case_id}/files/{filesystem_id}/{file_id}/content",
+            get(rest_get_file_content),
         )
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024)) // T-10: 10 MB request body limit
         .layer(TraceLayer::new_for_http())
@@ -1607,10 +1618,117 @@ async fn rest_get_object_lineage(
 
 async fn rest_get_object_content(
     State(state): State<AppState>,
-    AxPath((case_id, sha256)): AxPath<(String, String)>,
+    AxPath((case_id, object_id)): AxPath<(String, String)>,
+    headers: HeaderMap,
 ) -> Result<AxumResponse, ApiError> {
+    let actor = actor_from_headers(state.auth_mode, &headers, state.jwt_secret.as_deref()).inspect_err(|err| {
+        log_denied_access_best_effort(
+            &state,
+            &case_id,
+            "input_read_denied",
+            "object",
+            &object_id,
+            &err.message,
+            None,
+        );
+    })?;
+    enforce_tool_registry_read(&state, &actor).inspect_err(|err| {
+        log_denied_access_best_effort(
+            &state,
+            &case_id,
+            "input_read_denied",
+            "object",
+            &object_id,
+            &err.message,
+            Some(&actor),
+        );
+    })?;
+
+    let scope_ref = header_str(&headers, "x-offf-scope-ref");
+    let policy_refs = header_csv(&headers, "x-offf-policy-ref");
+
     let case_ref = resolve_case_ref(&state, &case_id)?;
-    let content = read_derived_object(&case_ref, &sha256).map_err(ApiError::from)?;
+    let content = match &case_ref {
+        ContainerRef::Local(base) => read_object_verified(base, &object_id).map_err(ApiError::from)?,
+        ContainerRef::S3 { .. } => {
+            return Err(ApiError::bad_request(
+                "verified object read endpoint currently supports local containers only",
+            ));
+        }
+    };
+
+    log_allowed_access_best_effort(
+        &state,
+        &case_id,
+        "input_read_allowed",
+        "object",
+        &object_id,
+        &actor,
+        scope_ref.as_deref(),
+        &policy_refs,
+    );
+
+    Ok((
+        [(header::CONTENT_TYPE, "application/octet-stream")],
+        content,
+    )
+        .into_response())
+}
+
+async fn rest_get_file_content(
+    State(state): State<AppState>,
+    AxPath((case_id, filesystem_id, file_id)): AxPath<(String, String, String)>,
+    headers: HeaderMap,
+) -> Result<AxumResponse, ApiError> {
+    let actor = actor_from_headers(state.auth_mode, &headers, state.jwt_secret.as_deref()).inspect_err(|err| {
+        log_denied_access_best_effort(
+            &state,
+            &case_id,
+            "input_read_denied",
+            "file",
+            &format!("{filesystem_id}:{file_id}"),
+            &err.message,
+            None,
+        );
+    })?;
+    enforce_tool_registry_read(&state, &actor).inspect_err(|err| {
+        log_denied_access_best_effort(
+            &state,
+            &case_id,
+            "input_read_denied",
+            "file",
+            &format!("{filesystem_id}:{file_id}"),
+            &err.message,
+            Some(&actor),
+        );
+    })?;
+
+    let scope_ref = header_str(&headers, "x-offf-scope-ref");
+    let policy_refs = header_csv(&headers, "x-offf-policy-ref");
+
+    let case_ref = resolve_case_ref(&state, &case_id)?;
+    let content = match &case_ref {
+        ContainerRef::Local(base) => {
+            read_file_verified(base, &filesystem_id, &file_id).map_err(ApiError::from)?
+        }
+        ContainerRef::S3 { .. } => {
+            return Err(ApiError::bad_request(
+                "verified file read endpoint currently supports local containers only",
+            ));
+        }
+    };
+
+    log_allowed_access_best_effort(
+        &state,
+        &case_id,
+        "input_read_allowed",
+        "file",
+        &format!("{filesystem_id}:{file_id}"),
+        &actor,
+        scope_ref.as_deref(),
+        &policy_refs,
+    );
+
     Ok((
         [(header::CONTENT_TYPE, "application/octet-stream")],
         content,
@@ -2061,6 +2179,36 @@ fn enforce_tool_registry(
     Ok(())
 }
 
+fn enforce_tool_registry_read(state: &AppState, actor: &ActorContext) -> Result<(), ApiError> {
+    let registry = load_tool_registry(Path::new(&state.tool_registry_path))?;
+    let rec = registry
+        .tools
+        .iter()
+        .find(|t| t.tool_id == actor.tool_id)
+        .ok_or_else(|| ApiError::forbidden(format!("tool not registered: {}", actor.tool_id)))?;
+
+    if !rec.status.eq_ignore_ascii_case("approved") {
+        return Err(ApiError::forbidden(format!(
+            "tool is not approved: {}",
+            actor.tool_id
+        )));
+    }
+
+    let role_name = role_name(actor.role);
+    if !rec
+        .allowed_roles
+        .iter()
+        .any(|r| r.eq_ignore_ascii_case(role_name))
+    {
+        return Err(ApiError::forbidden(format!(
+            "tool role not allowed: tool={} role={role_name}",
+            actor.tool_id
+        )));
+    }
+
+    Ok(())
+}
+
 fn load_tool_registry(path: &Path) -> Result<ToolRegistryFile, ApiError> {
     if !path.exists() {
         return Err(ApiError::forbidden(format!(
@@ -2298,6 +2446,130 @@ fn log_denied_write_best_effort(
             );
         }
     }
+}
+
+fn log_allowed_access_best_effort(
+    state: &AppState,
+    case_id: &str,
+    action: &str,
+    target_type: &str,
+    target_id: &str,
+    actor: &ActorContext,
+    scope_ref: Option<&str>,
+    policy_refs: &[String],
+) {
+    let case_ref = match resolve_case_ref(state, case_id) {
+        Ok(case_ref) => case_ref,
+        Err(err) => {
+            tracing::warn!(
+                action = action,
+                case_id = %case_id,
+                outcome = "allow_log_skip",
+                resolve_error = %err.message,
+            );
+            return;
+        }
+    };
+
+    let counter = case_ref
+        .read_text(ACCESS_EVENTS_REL)
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .count()
+        + 1;
+
+    let event = serde_json::json!({
+        "access_event_id": format!("access-{counter:06}"),
+        "timestamp": Utc::now().to_rfc3339(),
+        "actor": actor.tool_id,
+        "tool": {
+            "name": ACCESS_TOOL_NAME,
+            "version": ACCESS_TOOL_VERSION,
+        },
+        "action": action,
+        "target": {
+            "type": target_type,
+            "id": target_id,
+        },
+        "scope_ref": scope_ref,
+        "policy_refs": policy_refs,
+        "result": "allowed"
+    });
+
+    if let Ok(jsonl) = serde_json::to_string(&event) {
+        let _ = case_ref.append_jsonl_line(ACCESS_EVENTS_REL, &jsonl);
+    }
+}
+
+fn log_denied_access_best_effort(
+    state: &AppState,
+    case_id: &str,
+    action: &str,
+    target_type: &str,
+    target_id: &str,
+    reason: &str,
+    actor: Option<&ActorContext>,
+) {
+    let case_ref = match resolve_case_ref(state, case_id) {
+        Ok(case_ref) => case_ref,
+        Err(_) => return,
+    };
+
+    let counter = case_ref
+        .read_text(ACCESS_DENIED_REL)
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .count()
+        + 1;
+
+    let actor_id = actor.map(|a| a.tool_id.clone()).unwrap_or_else(|| "unknown".to_string());
+    let event = serde_json::json!({
+        "denied_event_id": format!("denied-read-{counter:06}"),
+        "timestamp": Utc::now().to_rfc3339(),
+        "actor": actor_id,
+        "tool": {
+            "name": ACCESS_TOOL_NAME,
+            "version": ACCESS_TOOL_VERSION,
+        },
+        "action": action,
+        "target": {
+            "type": target_type,
+            "id": target_id,
+        },
+        "result": "denied",
+        "reason_code": reason,
+        "scope_ref": serde_json::Value::Null,
+        "policy_refs": []
+    });
+
+    if let Ok(jsonl) = serde_json::to_string(&event) {
+        let _ = case_ref.append_jsonl_line(ACCESS_DENIED_REL, &jsonl);
+    }
+}
+
+fn header_str(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(ToString::to_string)
+}
+
+fn header_csv(headers: &HeaderMap, name: &str) -> Vec<String> {
+    headers
+        .get(name)
+        .and_then(|v| v.to_str().ok())
+        .map(|raw| {
+            raw.split(',')
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
 }
 
 fn value_to_file_row(row: &Value) -> FileRow {

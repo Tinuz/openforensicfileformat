@@ -12,6 +12,7 @@ use std::{
     fs,
     io::Write,
     path::{Path, PathBuf},
+    process::Command,
 };
 
 use sha2::{Digest, Sha256};
@@ -21,8 +22,12 @@ use offf_core::{
     chunk::{hex_sha256, read_chunk, verify_chunk, write_chunk},
     hash::{deserialize_merkle_root, merkle_root, serialize_merkle_tree},
     lineage::ObjectLineageValidator,
-    parquet_io::{read_leaves, read_physical_to_chunk, write_leaves, write_physical_to_chunk},
+    parquet_io::{
+        read_file_index, read_leaves, read_object_index, read_physical_to_chunk, write_leaves,
+        write_physical_to_chunk,
+    },
     provenance::ProvenanceWriter,
+    storage::read_object_verified,
     types::{
         AcquisitionJson, AcquisitionParameters, AcquisitionSource, ChunkMetadata, ChunkingInfo,
         Compression, DerivationRow, DiscoveredObjectRow, ManifestExtensions, ManifestHashes,
@@ -750,6 +755,8 @@ fn make_object(id: &str) -> DiscoveredObjectRow {
         sha256: None,
         source_layer: "carved".to_string(),
         storage_ref: None,
+        content_ref: None,
+        content_hash_status: None,
         root_source_ref: None,
         root_id: None,
         collection_relative_path: None,
@@ -1067,6 +1074,8 @@ fn make_file_collection_container(n: usize) -> (TempDir, PathBuf, Vec<String>) {
             sha256: Some(storage_ref.clone()),
             source_layer: "file_collection".to_string(),
             storage_ref: Some(sha256_hex.clone()),
+            content_ref: None,
+            content_hash_status: Some("verified".to_string()),
             root_source_ref: None,
             root_id: Some("root-001".to_string()),
             collection_relative_path: Some(format!("file_{i}.txt")),
@@ -1390,4 +1399,75 @@ fn parallel_job_scope_hash_mismatch_detected() {
         !scope_issues.is_empty(),
         "expected scope hash mismatch issues, got: {issues:?}"
     );
+}
+
+#[test]
+fn filesystem_to_object_graph_pipeline_builds_and_reads_verified() {
+    fn copy_dir_all(src: &Path, dst: &Path) {
+        fs::create_dir_all(dst).unwrap();
+        for entry in fs::read_dir(src).unwrap() {
+            let entry = entry.unwrap();
+            let ty = entry.file_type().unwrap();
+            let from = entry.path();
+            let to = dst.join(entry.file_name());
+            if ty.is_dir() {
+                copy_dir_all(&from, &to);
+            } else {
+                fs::copy(&from, &to).unwrap();
+            }
+        }
+    }
+
+    let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..");
+    let sample_case = workspace_root.join("tests/samples/4orensics.case2.offf");
+
+    let tmp = TempDir::new().unwrap();
+    let case_path = tmp.path().join("case.offf");
+    copy_dir_all(&sample_case, &case_path);
+
+    let status = Command::new("cargo")
+        .current_dir(&workspace_root)
+        .arg("run")
+        .arg("-p")
+        .arg("offf-index")
+        .arg("--")
+        .arg("objects")
+        .arg(case_path.to_string_lossy().to_string())
+        .arg("--from-filesystem")
+        .arg("--hash-content")
+        .arg("deferred")
+        .status()
+        .unwrap();
+    assert!(status.success(), "offf-index objects --from-filesystem failed");
+
+    assert!(case_path.join("indexes/objects/object_index.jsonl").exists());
+    assert!(case_path.join("indexes/objects/object_edges.jsonl").exists());
+    assert!(case_path.join("indexes/objects/derivations.jsonl").exists());
+
+    let file_rows = read_file_index(&case_path.join("indexes/filesystems/volume-1/file_index.parquet")).unwrap();
+    let file_row = file_rows
+        .iter()
+        .find(|r| !r.is_directory && !r.is_deleted && r.size_bytes > 0)
+        .expect("expected at least one indexed file row");
+
+    let objects = read_object_index(&case_path.join("indexes/objects/object_index.parquet")).unwrap();
+    let expected_file_id = format!("file-{:06}", file_row.file_id);
+    let object = objects
+        .iter()
+        .find(|o| {
+            o.object_type == "filesystem_file"
+                && o.content_ref
+                    .as_ref()
+                    .and_then(|c| c.file_id.as_deref())
+                    == Some(expected_file_id.as_str())
+        })
+        .expect("expected mapped filesystem_file object with content_ref");
+
+    assert!(object.storage_ref.is_none(), "filesystem-backed object must not be materialized by default");
+    assert_eq!(object.content_hash_status.as_deref(), Some("deferred"));
+
+    let bytes = read_object_verified(&case_path, &object.object_id).unwrap();
+    assert_eq!(bytes.len() as u64, object.size_bytes.unwrap_or(0));
 }
