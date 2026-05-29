@@ -13,7 +13,7 @@
 //! 5. Build full paths by following parent directory references.
 //! 6. Return one [`FileIndexRow`] per entry.
 
-use std::{collections::HashMap, path::Path};
+use std::{collections::{HashMap, VecDeque}, path::Path};
 
 use chrono::{DateTime, TimeZone, Utc};
 use serde_json::json;
@@ -24,6 +24,23 @@ use crate::{
     partition::chunk_refs_for_range,
     types::{ChunkMetadata, FileIndexRow, TOOL_VERSION},
 };
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+/// Chunk cache FIFO eviction threshold; at most this many decompressed chunks
+/// are held in memory simultaneously (~128 × chunk_size worst-case).
+const MAX_CACHED_CHUNKS: usize = 128;
+
+/// Maximum named $DATA streams (ADS) collected per MFT record.
+const MAX_ADS_PER_FILE: usize = 64;
+
+/// Maximum $ATTRIBUTE_LIST entries followed per resolution pass.
+const MAX_ATTR_LIST_ENTRIES: usize = 4_096;
+
+// Windows $STANDARD_INFORMATION file attribute flags
+const FILE_ATTR_SPARSE: u32 = 0x0200;
+const FILE_ATTR_COMPRESSED: u32 = 0x0800;
+const FILE_ATTR_ENCRYPTED: u32 = 0x4000;
 
 // ── NTFS Volume Boot Record ───────────────────────────────────────────────────
 
@@ -197,15 +214,22 @@ struct StdInfo {
     modified_at: Option<DateTime<Utc>>,
     changed_at: Option<DateTime<Utc>>,
     accessed_at: Option<DateTime<Utc>>,
-    #[allow(dead_code)]
     file_attributes: u32,
 }
 
+#[derive(Clone)]
 struct FileName {
     parent_mft: u64,
     name: String,
     namespace: u8, // 0=POSIX, 1=Win32, 2=DOS, 3=Win32&DOS
     real_size: u64,
+}
+
+/// An alternate data stream attached to a file.
+#[derive(Clone)]
+struct AdsEntry {
+    name: String,
+    size: u64,
 }
 
 struct MftRecord {
@@ -214,7 +238,19 @@ struct MftRecord {
     file_names: Vec<FileName>,
     data_size: u64,
     data_runs: Vec<DataRun>,
+    /// Named alternate data streams ($DATA with a name).
+    ads_streams: Vec<AdsEntry>,
+    /// Derived from $STANDARD_INFORMATION FILE_ATTRIBUTE_SPARSE_FILE (0x200).
+    is_sparse: bool,
+    /// Derived from $STANDARD_INFORMATION FILE_ATTRIBUTE_COMPRESSED (0x800).
+    is_compressed: bool,
+    /// Derived from $STANDARD_INFORMATION FILE_ATTRIBUTE_ENCRYPTED (0x4000).
+    is_encrypted: bool,
     has_attr_list: bool,
+    /// Resident $ATTRIBUTE_LIST content for second-pass resolution.
+    attr_list_resident: Option<Vec<u8>>,
+    /// Data runs for a non-resident $ATTRIBUTE_LIST (resolved in index_ntfs).
+    attr_list_runs: Vec<DataRun>,
     parse_error: Option<String>,
 }
 
@@ -295,7 +331,13 @@ fn parse_mft_record(raw: &[u8], record_size: usize) -> MftRecord {
         file_names: Vec::new(),
         data_size: 0,
         data_runs: Vec::new(),
+        ads_streams: Vec::new(),
+        is_sparse: false,
+        is_compressed: false,
+        is_encrypted: false,
         has_attr_list: false,
+        attr_list_resident: None,
+        attr_list_runs: Vec::new(),
         parse_error: None,
     };
 
@@ -336,11 +378,32 @@ fn parse_mft_record(raw: &[u8], record_size: usize) -> MftRecord {
                     u16::from_le_bytes(data[pos + 20..pos + 22].try_into().unwrap()) as usize;
                 if pos + c_off + c_len <= end {
                     rec.std_info = parse_std_info(&data[pos + c_off..pos + c_off + c_len]);
+                    if let Some(ref si) = rec.std_info {
+                        rec.is_sparse = si.file_attributes & FILE_ATTR_SPARSE != 0;
+                        rec.is_compressed = si.file_attributes & FILE_ATTR_COMPRESSED != 0;
+                        rec.is_encrypted = si.file_attributes & FILE_ATTR_ENCRYPTED != 0;
+                    }
                 }
             }
-            // $ATTRIBUTE_LIST – flag for partial parse
+            // $ATTRIBUTE_LIST – store for second-pass resolution
             0x20 => {
                 rec.has_attr_list = true;
+                if !non_resident && pos + 22 <= end {
+                    let c_len =
+                        u32::from_le_bytes(data[pos + 16..pos + 20].try_into().unwrap()) as usize;
+                    let c_off =
+                        u16::from_le_bytes(data[pos + 20..pos + 22].try_into().unwrap()) as usize;
+                    if c_len > 0 && pos + c_off + c_len <= end {
+                        rec.attr_list_resident =
+                            Some(data[pos + c_off..pos + c_off + c_len].to_vec());
+                    }
+                } else if non_resident && pos + 34 <= end {
+                    let rl_off =
+                        u16::from_le_bytes(data[pos + 32..pos + 34].try_into().unwrap()) as usize;
+                    if pos + rl_off < end {
+                        rec.attr_list_runs = parse_data_runs(&data[pos + rl_off..pos + attr_len]);
+                    }
+                }
             }
             // $FILE_NAME
             0x30 if !non_resident && pos + 22 <= end => {
@@ -355,11 +418,11 @@ fn parse_mft_record(raw: &[u8], record_size: usize) -> MftRecord {
                     }
                 }
             }
-            // $DATA (default stream only; skip named streams)
+            // $DATA – default (unnamed) stream and named ADS
             0x80 => {
-                // Check name_length at offset +9 – skip if != 0 (named ADS)
-                let name_len = data[pos + 9];
-                if name_len == 0 {
+                let name_len_chars = data[pos + 9] as usize;
+                if name_len_chars == 0 {
+                    // Unnamed (default) data stream
                     if non_resident {
                         if pos + 64 <= end {
                             rec.data_size =
@@ -375,6 +438,36 @@ fn parse_mft_record(raw: &[u8], record_size: usize) -> MftRecord {
                     } else if pos + 20 <= end {
                         rec.data_size =
                             u32::from_le_bytes(data[pos + 16..pos + 20].try_into().unwrap()) as u64;
+                    }
+                } else if rec.ads_streams.len() < MAX_ADS_PER_FILE {
+                    // Named alternate data stream
+                    let name_off =
+                        u16::from_le_bytes(data[pos + 10..pos + 12].try_into().unwrap()) as usize;
+                    let name_byte_len = name_len_chars.min(256) * 2;
+                    if pos + name_off + name_byte_len <= end {
+                        let name_utf16: Vec<u16> =
+                            data[pos + name_off..pos + name_off + name_byte_len]
+                                .chunks_exact(2)
+                                .map(|b| u16::from_le_bytes([b[0], b[1]]))
+                                .collect();
+                        let stream_name = String::from_utf16_lossy(&name_utf16).to_owned();
+                        let stream_size = if non_resident {
+                            if pos + 0x38 + 8 <= end {
+                                u64::from_le_bytes(
+                                    data[pos + 0x30..pos + 0x38].try_into().unwrap(),
+                                )
+                            } else {
+                                0
+                            }
+                        } else if pos + 20 <= end {
+                            u32::from_le_bytes(data[pos + 16..pos + 20].try_into().unwrap()) as u64
+                        } else {
+                            0
+                        };
+                        rec.ads_streams.push(AdsEntry {
+                            name: stream_name,
+                            size: stream_size,
+                        });
                     }
                 }
             }
@@ -413,14 +506,58 @@ fn best_file_name(names: &[FileName]) -> Option<&FileName> {
     names.iter().min_by_key(|f| priority(f.namespace))
 }
 
+// ── Attribute list resolution ─────────────────────────────────────────────────
+
+/// Parse a `$ATTRIBUTE_LIST` attribute content and return the MFT entry
+/// numbers of all *extension* records (i.e., records other than `base_entry`)
+/// referenced by the list.
+///
+/// Each entry in the attribute list has the layout:
+///   +0  u32  attribute type
+///   +4  u16  record length (including name, padded to 8-byte boundary)
+///   +6  u8   name length (in UTF-16 code units)
+///   +7  u8   name offset (from start of this entry)
+///   +8  u64  starting VCN
+///  +16  u64  base file reference (48-bit MFT# | 16-bit sequence)
+///  +24  u16  attribute ID
+fn parse_attr_list_mft_refs(data: &[u8], base_entry: u64) -> Vec<u64> {
+    let mut refs: Vec<u64> = Vec::new();
+    let mut pos = 0usize;
+    let mut count = 0usize;
+
+    while pos + 26 <= data.len() && count < MAX_ATTR_LIST_ENTRIES {
+        let record_len = u16::from_le_bytes([data[pos + 4], data[pos + 5]]) as usize;
+        if record_len < 26 || pos + record_len > data.len() {
+            break;
+        }
+        // MFT file reference: low 48 bits = MFT entry number
+        let mft_ref = u64::from_le_bytes(
+            data[pos + 16..pos + 24].try_into().unwrap_or([0u8; 8]),
+        ) & 0x0000_FFFF_FFFF_FFFF;
+        // Skip the base record itself and the reserved NTFS meta-files (0–11)
+        if mft_ref != base_entry && mft_ref > 11 {
+            refs.push(mft_ref);
+        }
+        pos += record_len;
+        count += 1;
+    }
+
+    refs.sort_unstable();
+    refs.dedup();
+    refs
+}
+
 // ── Chunk cache ───────────────────────────────────────────────────────────────
 
 /// Read bytes from the OFFF chunk store, caching decompressed chunks to avoid
 /// repeated decompression when reading many small regions (e.g., MFT records).
+/// A FIFO eviction policy bounds resident memory to ≤ `MAX_CACHED_CHUNKS` chunks.
 struct ChunkCache<'a> {
     base: &'a Path,
     chunks: &'a [ChunkMetadata],
     cache: HashMap<u64, Vec<u8>>,
+    /// Insertion order for FIFO eviction.
+    fifo: VecDeque<u64>,
 }
 
 impl<'a> ChunkCache<'a> {
@@ -429,6 +566,7 @@ impl<'a> ChunkCache<'a> {
             base,
             chunks,
             cache: HashMap::new(),
+            fifo: VecDeque::new(),
         }
     }
 
@@ -448,8 +586,15 @@ impl<'a> ChunkCache<'a> {
             }
             // Populate cache if needed
             if !self.cache.contains_key(&chunk.sequence) {
+                // Evict oldest entry when the cache is full
+                if self.cache.len() >= MAX_CACHED_CHUNKS {
+                    if let Some(oldest) = self.fifo.pop_front() {
+                        self.cache.remove(&oldest);
+                    }
+                }
                 let plain = read_chunk(self.base, chunk)?;
                 self.cache.insert(chunk.sequence, plain);
+                self.fifo.push_back(chunk.sequence);
             }
             let plain = self.cache.get(&chunk.sequence).unwrap();
 
@@ -667,7 +812,74 @@ pub fn index_ntfs(
 
     eprintln!("Valid FILE records: {}", record_map.len());
 
-    // Build full paths
+    // Second pass: resolve $ATTRIBUTE_LIST entries by merging attributes from
+    // extension MFT records into their respective base records.
+    {
+        let work: Vec<(u64, Vec<u8>)> = record_map
+            .iter()
+            .filter(|(_, r)| r.has_attr_list)
+            .filter_map(|(&id, r)| {
+                if let Some(resident) = &r.attr_list_resident {
+                    return Some((id, resident.clone()));
+                }
+                if !r.attr_list_runs.is_empty() {
+                    // Read non-resident $ATTRIBUTE_LIST from the chunk store
+                    let mut buf: Vec<u8> = Vec::new();
+                    for run in &r.attr_list_runs {
+                        if run.lcn_start < 0 {
+                            continue; // sparse run
+                        }
+                        let offset = volume_offset + run.lcn_start as u64 * vbr.bytes_per_cluster;
+                        let len = run.cluster_count * vbr.bytes_per_cluster;
+                        if let Ok(data) = cache.read_at(offset, len) {
+                            buf.extend_from_slice(&data);
+                        }
+                    }
+                    if buf.is_empty() { None } else { Some((id, buf)) }
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for (base_id, attr_list_bytes) in work {
+            let ext_refs = parse_attr_list_mft_refs(&attr_list_bytes, base_id);
+            let mut new_ads: Vec<AdsEntry> = Vec::new();
+            let mut new_fns: Vec<FileName> = Vec::new();
+            for ext_id in &ext_refs {
+                if let Some(ext) = record_map.get(ext_id) {
+                    for a in &ext.ads_streams {
+                        new_ads.push(a.clone());
+                    }
+                    for f in &ext.file_names {
+                        new_fns.push(f.clone());
+                    }
+                }
+            }
+            if let Some(base) = record_map.get_mut(&base_id) {
+                for a in new_ads {
+                    if base.ads_streams.len() < MAX_ADS_PER_FILE
+                        && !base.ads_streams.iter().any(|x| x.name == a.name)
+                    {
+                        base.ads_streams.push(a);
+                    }
+                }
+                for f in new_fns {
+                    if !base
+                        .file_names
+                        .iter()
+                        .any(|x| x.name == f.name && x.namespace == f.namespace)
+                    {
+                        base.file_names.push(f);
+                    }
+                }
+                // Successfully resolved – clear the partial-parse marker
+                base.has_attr_list = false;
+            }
+        }
+    }
+
+
     let paths = build_paths(&record_map);
 
     // Build FileIndexRow list
@@ -757,10 +969,20 @@ pub fn index_ntfs(
             chunk_refs: chunk_refs_json,
             is_directory,
             is_deleted,
-            is_sparse: false,       // sparse flag from $STANDARD_INFORMATION not yet parsed
-            is_compressed: false,   // compressed flag from $STANDARD_INFORMATION not yet parsed
-            is_encrypted: false,    // encrypted flag from $STANDARD_INFORMATION not yet parsed
-            ads_streams: "[]".to_string(),
+            is_sparse: rec.is_sparse,
+            is_compressed: rec.is_compressed,
+            is_encrypted: rec.is_encrypted,
+            ads_streams: if rec.ads_streams.is_empty() {
+                "[]".to_string()
+            } else {
+                serde_json::to_string(
+                    &rec.ads_streams
+                        .iter()
+                        .map(|a| json!({"name": a.name, "size": a.size}))
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap_or_else(|_| "[]".into())
+            },
             parser: tool_name.to_string(),
             parser_version: TOOL_VERSION.to_string(),
             parser_status,
@@ -850,5 +1072,82 @@ mod tests {
         assert!(apply_fixup(&mut rec));
         assert_eq!(u16::from_le_bytes([rec[510], rec[511]]), 0x1111);
         assert_eq!(u16::from_le_bytes([rec[1022], rec[1023]]), 0x2222);
+    }
+
+    #[test]
+    fn std_info_flags_decoded() {
+        // $STANDARD_INFORMATION: timestamps (4 × 8 bytes) + file_attributes at +32
+        let mut content = [0u8; 48];
+        // sparse (0x200) + encrypted (0x4000) = 0x4200
+        let flags: u32 = 0x4200;
+        content[32..36].copy_from_slice(&flags.to_le_bytes());
+        let si = parse_std_info(&content).expect("should parse StdInfo");
+        assert!(si.file_attributes & FILE_ATTR_SPARSE != 0, "sparse bit should be set");
+        assert!(si.file_attributes & FILE_ATTR_ENCRYPTED != 0, "encrypted bit should be set");
+        assert!(si.file_attributes & FILE_ATTR_COMPRESSED == 0, "compressed bit should not be set");
+    }
+
+    /// Build a synthetic 1024-byte MFT record containing two named $DATA
+    /// attributes ("Zone.Identifier" and "thumb") and verify they surface as
+    /// ADS entries.
+    #[test]
+    fn ads_streams_detected() {
+        let record_size = 1024usize;
+        let mut rec = vec![0u8; record_size];
+        rec[0..4].copy_from_slice(b"FILE");
+        // USA: offset=48, count=3 (1 USN + 2 sector entries)
+        rec[4..6].copy_from_slice(&48u16.to_le_bytes());
+        rec[6..8].copy_from_slice(&3u16.to_le_bytes());
+        let usn: u16 = 0x1234;
+        rec[48..50].copy_from_slice(&usn.to_le_bytes());
+        rec[50..52].copy_from_slice(&0xAAAAu16.to_le_bytes());
+        rec[52..54].copy_from_slice(&0xBBBBu16.to_le_bytes());
+        rec[510..512].copy_from_slice(&usn.to_le_bytes());
+        rec[1022..1024].copy_from_slice(&usn.to_le_bytes());
+        // flags = in-use, first_attr_offset = 56
+        rec[22..24].copy_from_slice(&1u16.to_le_bytes());
+        rec[20..22].copy_from_slice(&56u16.to_le_bytes());
+
+        let mut pos = 56usize;
+
+        // Helper: append a resident named $DATA attribute
+        let append_ads = |rec: &mut Vec<u8>, pos: &mut usize, name: &str, size: u32| {
+            let name_utf16: Vec<u16> = name.encode_utf16().collect();
+            let name_bytes: Vec<u8> = name_utf16.iter().flat_map(|c| c.to_le_bytes()).collect();
+            let name_len_chars = name_utf16.len() as u8;
+            // Header (16 bytes) + name + padding
+            let hdr = 24usize; // enough room for resident fields + name_offset
+            let total = (hdr + name_bytes.len() + 7) & !7usize;
+            rec[*pos..*pos + 4].copy_from_slice(&0x80u32.to_le_bytes()); // $DATA
+            rec[*pos + 4..*pos + 8].copy_from_slice(&(total as u32).to_le_bytes());
+            rec[*pos + 8] = 0; // resident
+            rec[*pos + 9] = name_len_chars;
+            rec[*pos + 10..*pos + 12].copy_from_slice(&(hdr as u16).to_le_bytes()); // name_offset
+            rec[*pos + 16..*pos + 20].copy_from_slice(&size.to_le_bytes()); // value_length
+            let val_off = (hdr + name_bytes.len() + 7) & !7usize; // after name, aligned
+            rec[*pos + 20..*pos + 22].copy_from_slice(&(val_off as u16).to_le_bytes());
+            rec[*pos + hdr..*pos + hdr + name_bytes.len()].copy_from_slice(&name_bytes);
+            *pos += total;
+        };
+
+        append_ads(&mut rec, &mut pos, "Zone.Identifier", 42);
+        append_ads(&mut rec, &mut pos, "thumb", 100);
+
+        // End-of-attributes marker
+        rec[pos..pos + 4].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        let end_pos = pos + 8;
+        rec[24..28].copy_from_slice(&(end_pos as u32).to_le_bytes()); // real_size
+
+        let mft_rec = parse_mft_record(&rec, record_size);
+        assert_eq!(mft_rec.ads_streams.len(), 2, "expected 2 ADS entries");
+        let by_name = |n: &str| {
+            mft_rec
+                .ads_streams
+                .iter()
+                .find(|a| a.name == n)
+                .unwrap_or_else(|| panic!("ADS '{}' not found", n))
+        };
+        assert_eq!(by_name("Zone.Identifier").size, 42);
+        assert_eq!(by_name("thumb").size, 100);
     }
 }

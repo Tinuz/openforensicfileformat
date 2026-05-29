@@ -325,10 +325,11 @@ P2 - Later
   - Add `docs/versioning.md`
   - Add `offf-migrate` path from v0.1 to v0.2 with evidence hash invariants
 
-- [x] NTFS forensic depth improvements (P2) ✅ 2026-05-28
-  - ATTRIBUTE_LIST support
-  - ADS/sparse/compressed/encrypted modeling
-  - Streaming parser memory hardening
+- [x] NTFS forensic depth improvements (P2) ✅ 2026-05-28 (completed 2026-05-29)
+  - ATTRIBUTE_LIST support: resident + non-resident resolution; merges ADS/file_names from extension records
+  - ADS/sparse/compressed/encrypted: named $DATA streams collected as JSON; file_attribute bits decoded from $STANDARD_INFORMATION
+  - Streaming parser memory hardening: FIFO chunk-cache eviction (MAX_CACHED_CHUNKS=128), MAX_ADS_PER_FILE=64, MAX_ATTR_LIST_ENTRIES=4096
+  - Two new unit tests: `std_info_flags_decoded`, `ads_streams_detected`; all 68 workspace tests pass
 
 - [x] OFFF packed container (single-file) initial implementation (P1)
   - Add core packed container format with deterministic index + checksum footer
