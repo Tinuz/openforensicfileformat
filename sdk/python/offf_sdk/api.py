@@ -102,6 +102,16 @@ def read_object_edges(container: OfffContainer) -> list[dict[str, Any]]:
     return container.read_object_edges()
 
 
+def read_evidence_file(container: OfffContainer, sha256_hex: str) -> bytes:
+    """Read a content-addressed evidence object from a file_collection container."""
+    return container.read_evidence_file(sha256_hex)
+
+
+def list_evidence_objects(container: OfffContainer) -> list[dict[str, Any]]:
+    """Return summary dicts for all evidence objects stored in a file_collection container."""
+    return container.list_evidence_objects()
+
+
 def read_derivations(container: OfffContainer) -> list[dict[str, Any]]:
     return container.read_derivations()
 

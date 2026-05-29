@@ -198,11 +198,25 @@ pub struct DiscoveredObjectRow {
     pub sha256: Option<String>,
     pub source_layer: String,
     pub storage_ref: Option<String>,
+    /// Legacy field: kept for backward compat. Prefer `root_id` for new containers.
     pub root_source_ref: Option<String>,
+    /// Root collection object_id this evidence object belongs to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root_id: Option<String>,
+    /// Path relative to the collection root (e.g. "Documents/contract.docx").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub collection_relative_path: Option<String>,
     pub created_by_job_id: Option<String>,
     pub parser_status: String,
     pub provenance_ref: Option<String>,
     pub schema_version: String,
+    /// Original file timestamps preserved from the source filesystem.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub original_created_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub original_modified_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub original_accessed_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -591,6 +605,62 @@ pub struct AuditEvent {
     pub provenance_ref: Option<String>,
 }
 
+// ── Acquisition mode ──────────────────────────────────────────────────────────
+
+/// How the evidence was acquired and what its source structure is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AcquisitionMode {
+    /// Full byte-stream image of a storage medium (raw/dd/E01).
+    BlockImage,
+    /// Collection of individual files or directories seized as evidence.
+    FileCollection,
+    /// Logical extraction from a device, app, cloud service, or mailbox.
+    LogicalExtraction,
+    /// Export received via an API (cloud, SaaS, etc.).
+    ApiExport,
+    /// Multiple evidence roots with different acquisition modes.
+    Mixed,
+}
+
+impl AcquisitionMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::BlockImage => "block_image",
+            Self::FileCollection => "file_collection",
+            Self::LogicalExtraction => "logical_extraction",
+            Self::ApiExport => "api_export",
+            Self::Mixed => "mixed",
+        }
+    }
+}
+
+/// Describes a single evidence root within a container.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvidenceRoot {
+    /// Unique identifier for this root (also the object_id of the root collection object).
+    pub root_id: String,
+    /// "file_collection" | "block_image" | "logical_extraction" | ...
+    pub root_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub object_count: Option<u64>,
+    /// Deterministic hash of the collection manifest (sorted object metadata).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root_hash: Option<String>,
+}
+
+/// Source context recorded for selective acquisitions (file_collection etc.).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AcquisitionSourceContext {
+    pub description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub original_root_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub collection_reason: Option<String>,
+}
+
 // ── Manifest ──────────────────────────────────────────────────────────────────
 
 /// Free-form extension entries, keyed by `namespace:name` strings.
@@ -610,13 +680,37 @@ pub struct ManifestJson {
     pub container_id: String,
     pub created_at: DateTime<Utc>,
     pub created_by_tool: ToolInfo,
-    pub source: SourceInfo,
-    pub hashes: ManifestHashes,
-    pub chunking: ChunkingInfo,
+    /// How the evidence was acquired.  Absent in legacy containers (implies block_image).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub acquisition_mode: Option<AcquisitionMode>,
+    /// Present when acquisition_mode is block_image (legacy or explicit).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<SourceInfo>,
+    /// Present when acquisition_mode is block_image.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hashes: Option<ManifestHashes>,
+    /// Present when acquisition_mode is block_image.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chunking: Option<ChunkingInfo>,
+    /// Evidence roots for non-block-image acquisitions (or multi-root).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence_roots: Option<Vec<EvidenceRoot>>,
+    /// Explicit limitations of this acquisition (mandatory for file_collection).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limitations: Option<Vec<String>>,
     pub indexes: ManifestIndexes,
     /// Optional extension namespace entries (OFFF v0.2.0+).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extensions: Option<ManifestExtensions>,
+}
+
+impl ManifestJson {
+    /// Returns the effective acquisition mode (defaults to BlockImage for legacy containers).
+    pub fn effective_mode(&self) -> AcquisitionMode {
+        self.acquisition_mode
+            .clone()
+            .unwrap_or(AcquisitionMode::BlockImage)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -649,7 +743,15 @@ pub struct ChunkingInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManifestIndexes {
-    pub physical_to_chunk: String,
+    /// Path to physical_to_chunk.parquet; present for block_image containers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub physical_to_chunk: Option<String>,
+    /// Path to object_index.jsonl / .parquet; present for file_collection containers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub object_index: Option<String>,
+    /// Path to object_edges.jsonl / .parquet; present for file_collection containers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub object_edges: Option<String>,
 }
 
 // ── Acquisition ───────────────────────────────────────────────────────────────
@@ -657,14 +759,36 @@ pub struct ManifestIndexes {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AcquisitionJson {
     pub container_id: String,
+    /// Acquisition identifier (e.g. "acq-000001").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub acquisition_id: Option<String>,
+    /// How the evidence was acquired.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub acquisition_mode: Option<String>,
     pub acquired_at: DateTime<Utc>,
+    /// Person or system that performed the acquisition.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub acquired_by: Option<String>,
+    /// Acquisition method description (e.g. "selected_file_collection").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub method: Option<String>,
     pub tool: ToolInfo,
-    pub source: AcquisitionSource,
+    /// Source metadata; optional for file_collection (no single source file).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<AcquisitionSource>,
+    /// Human context for selective acquisitions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_context: Option<AcquisitionSourceContext>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_container: Option<SourceContainerInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub evidence_stream: Option<EvidenceStreamInfo>,
-    pub parameters: AcquisitionParameters,
+    /// Parameters used during acquisition; optional for file_collection.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parameters: Option<AcquisitionParameters>,
+    /// Explicit limitations that apply to this acquisition.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limitations: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

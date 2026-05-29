@@ -2251,7 +2251,7 @@ fn load_case_data(
     let manifest_value = read_json_file(&case_ref, "manifest.json")?;
     let manifest: ManifestJson = serde_json::from_value(manifest_value)?;
     let map_data = case_ref
-        .read_bytes(&manifest.indexes.physical_to_chunk)
+        .read_bytes(manifest.indexes.physical_to_chunk.as_deref().unwrap_or("maps/physical_to_chunk.parquet"))
         .map_err(ApiError::from)?;
     let chunks = read_physical_to_chunk_bytes(&map_data).map_err(ApiError::from)?;
     Ok((case_ref, manifest, chunks))

@@ -719,7 +719,9 @@ fn resolve_case(case: &Path, chunks_arg: &str) -> Result<(String, Vec<String>)> 
     let manifest: ManifestJson = serde_json::from_str(&manifest_raw)?;
 
     let chunk_ids = if chunks_arg == "all" {
-        let map_path = case.join(&manifest.indexes.physical_to_chunk);
+        let map_path = case.join(
+            manifest.indexes.physical_to_chunk.as_deref().unwrap_or("maps/physical_to_chunk.parquet")
+        );
         let chunks = read_physical_to_chunk(&map_path)
             .context("failed to read physical_to_chunk.parquet")?;
         chunks.into_iter().map(|c| c.chunk_id).collect()

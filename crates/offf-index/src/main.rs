@@ -117,10 +117,15 @@ fn cmd_partitions(base: &Path) -> Result<()> {
 
     println!("Container: {}", base.display());
     println!("Container ID: {}", manifest.container_id);
-    println!("Sector size: {} bytes", manifest.source.sector_size);
+    println!(
+        "Sector size: {} bytes",
+        manifest.source.as_ref().map(|s| s.sector_size).unwrap_or(512)
+    );
     println!();
 
-    let map_path = base.join(&manifest.indexes.physical_to_chunk);
+    let map_path = base.join(
+        manifest.indexes.physical_to_chunk.as_deref().unwrap_or("maps/physical_to_chunk.parquet")
+    );
     let chunks =
         read_physical_to_chunk(&map_path).context("failed to read physical_to_chunk.parquet")?;
 
@@ -133,7 +138,7 @@ fn cmd_partitions(base: &Path) -> Result<()> {
     let table = detect_and_parse(
         base,
         &chunks,
-        manifest.source.sector_size,
+        manifest.source.as_ref().map(|s| s.sector_size).unwrap_or(512),
         &manifest.container_id,
         TOOL_NAME,
     )
@@ -207,7 +212,9 @@ fn cmd_filesystem(base: &Path, partition_arg: Option<String>) -> Result<()> {
     println!("Container ID: {}", manifest.container_id);
     println!();
 
-    let map_path = base.join(&manifest.indexes.physical_to_chunk);
+    let map_path = base.join(
+        manifest.indexes.physical_to_chunk.as_deref().unwrap_or("maps/physical_to_chunk.parquet")
+    );
     let chunks =
         read_physical_to_chunk(&map_path).context("failed to read physical_to_chunk.parquet")?;
 
@@ -216,7 +223,7 @@ fn cmd_filesystem(base: &Path, partition_arg: Option<String>) -> Result<()> {
     }
 
     let (partition_id, volume_offset, volume_size, fs_type) =
-        resolve_partition(base, &chunks, manifest.source.sector_size, &partition_arg)?;
+        resolve_partition(base, &chunks, manifest.source.as_ref().map(|s| s.sector_size).unwrap_or(512), &partition_arg)?;
 
     println!("Partition:    {partition_id}");
     println!("Filesystem:   {fs_type}");

@@ -500,10 +500,15 @@ pub fn write_object_index(path: &Path, rows: &[DiscoveredObjectRow]) -> Result<(
         Field::new("source_layer", DataType::Utf8, false),
         Field::new("storage_ref", DataType::Utf8, true),
         Field::new("root_source_ref", DataType::Utf8, true),
+        Field::new("root_id", DataType::Utf8, true),
+        Field::new("collection_relative_path", DataType::Utf8, true),
         Field::new("created_by_job_id", DataType::Utf8, true),
         Field::new("parser_status", DataType::Utf8, false),
         Field::new("provenance_ref", DataType::Utf8, true),
         Field::new("schema_version", DataType::Utf8, false),
+        Field::new("original_created_at", DataType::Utf8, true),
+        Field::new("original_modified_at", DataType::Utf8, true),
+        Field::new("original_accessed_at", DataType::Utf8, true),
     ]));
 
     let batch = RecordBatch::try_new(
@@ -538,6 +543,12 @@ pub fn write_object_index(path: &Path, rows: &[DiscoveredObjectRow]) -> Result<(
                 rows.iter().map(|r| r.root_source_ref.as_deref()),
             )) as ArrayRef,
             Arc::new(StringArray::from_iter(
+                rows.iter().map(|r| r.root_id.as_deref()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter(
+                rows.iter().map(|r| r.collection_relative_path.as_deref()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter(
                 rows.iter().map(|r| r.created_by_job_id.as_deref()),
             )) as ArrayRef,
             Arc::new(StringArray::from_iter_values(
@@ -548,6 +559,15 @@ pub fn write_object_index(path: &Path, rows: &[DiscoveredObjectRow]) -> Result<(
             )) as ArrayRef,
             Arc::new(StringArray::from_iter_values(
                 rows.iter().map(|r| r.schema_version.as_str()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter(
+                rows.iter().map(|r| r.original_created_at.as_deref()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter(
+                rows.iter().map(|r| r.original_modified_at.as_deref()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter(
+                rows.iter().map(|r| r.original_accessed_at.as_deref()),
             )) as ArrayRef,
         ],
     )?;
@@ -575,6 +595,12 @@ pub fn read_object_index(path: &Path) -> Result<Vec<DiscoveredObjectRow>, OfffEr
         let source_layer = as_str_col(&batch, "source_layer")?;
         let storage_ref = as_str_col(&batch, "storage_ref")?;
         let root_source_ref = as_str_col(&batch, "root_source_ref")?;
+        // New nullable columns (absent in old parquet files → None)
+        let root_id = as_str_col(&batch, "root_id").ok();
+        let collection_relative_path = as_str_col(&batch, "collection_relative_path").ok();
+        let original_created_at = as_str_col(&batch, "original_created_at").ok();
+        let original_modified_at = as_str_col(&batch, "original_modified_at").ok();
+        let original_accessed_at = as_str_col(&batch, "original_accessed_at").ok();
         let created_by_job_id = as_str_col(&batch, "created_by_job_id")?;
         let parser_status = as_str_col(&batch, "parser_status")?;
         let provenance_ref = as_str_col(&batch, "provenance_ref")?;
@@ -592,6 +618,11 @@ pub fn read_object_index(path: &Path) -> Result<Vec<DiscoveredObjectRow>, OfffEr
                 source_layer: source_layer.value(i).to_string(),
                 storage_ref: str_value_or_none(storage_ref, i),
                 root_source_ref: str_value_or_none(root_source_ref, i),
+                root_id: root_id.as_ref().and_then(|c| str_value_or_none(c, i)),
+                collection_relative_path: collection_relative_path.as_ref().and_then(|c| str_value_or_none(c, i)),
+                original_created_at: original_created_at.as_ref().and_then(|c| str_value_or_none(c, i)),
+                original_modified_at: original_modified_at.as_ref().and_then(|c| str_value_or_none(c, i)),
+                original_accessed_at: original_accessed_at.as_ref().and_then(|c| str_value_or_none(c, i)),
                 created_by_job_id: str_value_or_none(created_by_job_id, i),
                 parser_status: parser_status.value(i).to_string(),
                 provenance_ref: str_value_or_none(provenance_ref, i),
@@ -858,6 +889,11 @@ pub fn for_each_object_batch(
         let source_layer = as_str_col(&batch, "source_layer")?;
         let storage_ref = as_str_col(&batch, "storage_ref")?;
         let root_source_ref = as_str_col(&batch, "root_source_ref")?;
+        let root_id = as_str_col(&batch, "root_id").ok();
+        let collection_relative_path = as_str_col(&batch, "collection_relative_path").ok();
+        let original_created_at = as_str_col(&batch, "original_created_at").ok();
+        let original_modified_at = as_str_col(&batch, "original_modified_at").ok();
+        let original_accessed_at = as_str_col(&batch, "original_accessed_at").ok();
         let created_by_job_id = as_str_col(&batch, "created_by_job_id")?;
         let parser_status = as_str_col(&batch, "parser_status")?;
         let provenance_ref = as_str_col(&batch, "provenance_ref")?;
@@ -875,6 +911,11 @@ pub fn for_each_object_batch(
                 source_layer: source_layer.value(i).to_string(),
                 storage_ref: str_value_or_none(storage_ref, i),
                 root_source_ref: str_value_or_none(root_source_ref, i),
+                root_id: root_id.as_ref().and_then(|c| str_value_or_none(c, i)),
+                collection_relative_path: collection_relative_path.as_ref().and_then(|c| str_value_or_none(c, i)),
+                original_created_at: original_created_at.as_ref().and_then(|c| str_value_or_none(c, i)),
+                original_modified_at: original_modified_at.as_ref().and_then(|c| str_value_or_none(c, i)),
+                original_accessed_at: original_accessed_at.as_ref().and_then(|c| str_value_or_none(c, i)),
                 created_by_job_id: str_value_or_none(created_by_job_id, i),
                 parser_status: parser_status.value(i).to_string(),
                 provenance_ref: str_value_or_none(provenance_ref, i),

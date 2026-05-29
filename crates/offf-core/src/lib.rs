@@ -1,5 +1,6 @@
 pub mod chunk;
 pub mod error;
+pub mod evidence;
 pub mod extensions;
 pub mod hash;
 pub mod lineage;

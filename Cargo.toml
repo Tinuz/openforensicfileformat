@@ -2,6 +2,7 @@
 members = [
     "crates/offf-core",
     "crates/offf-access-service",
+    "crates/offf-collect",
     "crates/offf-convert",
     "crates/offf-verify",
     "crates/offf-export",

@@ -114,6 +114,15 @@ fn main() -> Result<()> {
         .context("manifest.json not found – is this an OFFF container?")?;
     let manifest: ManifestJson = serde_json::from_str(&manifest_raw)?;
 
+    // ── Acquisition mode guard ────────────────────────────────────────────
+    use offf_core::types::AcquisitionMode;
+    if matches!(manifest.effective_mode(), AcquisitionMode::FileCollection) {
+        anyhow::bail!(
+            "yara_scan is not supported for file_collection containers; \
+             use a file-collection–aware worker instead"
+        );
+    }
+
     // ── Parse parameters ──────────────────────────────────────────────────
     let rules_text = job.parameters["rules_inline"]
         .as_str()
@@ -330,8 +339,8 @@ fn main() -> Result<()> {
         },
         input: ResultManifestInput {
             container_id: manifest.container_id,
-            source_sha256: manifest.hashes.source_sha256,
-            merkle_root_sha256: manifest.hashes.merkle_root_sha256,
+            source_sha256: manifest.hashes.as_ref().map(|h| h.source_sha256.clone()).unwrap_or_default(),
+            merkle_root_sha256: manifest.hashes.as_ref().map(|h| h.merkle_root_sha256.clone()).unwrap_or_default(),
             scope_ref: job.scope_ref.clone(),
             chunk_count: scoped_chunks.len(),
         },

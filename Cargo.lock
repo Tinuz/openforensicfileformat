@@ -3027,6 +3027,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "offf-collect"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "offf-core",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "uuid",
+ "walkdir",
+]
+
+[[package]]
 name = "offf-convert"
 version = "0.1.0"
 dependencies = [

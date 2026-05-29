@@ -3,7 +3,7 @@ use std::{fs, path::PathBuf};
 use aws_config::{BehaviorVersion, Region};
 use aws_sdk_s3::{primitives::ByteStream, Client};
 
-use crate::{chunk::hex_sha256, error::OfffError, types::ChunkMetadata};
+use crate::{chunk::hex_sha256, error::OfffError, evidence, types::{ChunkMetadata, DiscoveredObjectRow}};
 
 #[derive(Debug, Clone)]
 pub enum ContainerRef {
@@ -533,6 +533,57 @@ fn join_key(prefix: &str, rel: &str) -> String {
             rel.trim_start_matches('/')
         )
     }
+}
+
+/// Read an evidence file from a `file_collection` container by its `object_id`.
+///
+/// Looks up the `storage_ref` (hex SHA-256) in the index, then reads and
+/// verifies the evidence object from `{base}/evidence/objects/...`.
+///
+/// Returns `OfffError::InvalidContainer` if the object is not found in the
+/// index or has no `storage_ref`.
+pub fn read_evidence_file_verified(
+    base: &std::path::Path,
+    object_id: &str,
+    index: &[DiscoveredObjectRow],
+) -> Result<Vec<u8>, OfffError> {
+    let sha256_ref = resolve_evidence_storage_ref(object_id, index)?;
+    evidence::read_evidence_object(base, sha256_ref)
+}
+
+/// Compute (or confirm) the SHA-256 of an evidence object without loading it
+/// fully into memory via the index `storage_ref`.
+///
+/// Returns the hex-encoded SHA-256. This is a lightweight path that just
+/// verifies the stored hash without decompression.
+pub fn compute_object_sha256(
+    base: &std::path::Path,
+    object_id: &str,
+    index: &[DiscoveredObjectRow],
+) -> Result<String, OfffError> {
+    let sha256_ref = resolve_evidence_storage_ref(object_id, index)?;
+    // Verifying the object re-reads it, which confirms the hash matches.
+    evidence::verify_evidence_object(base, sha256_ref)?;
+    Ok(sha256_ref.to_string())
+}
+
+fn resolve_evidence_storage_ref<'a>(
+    object_id: &str,
+    index: &'a [DiscoveredObjectRow],
+) -> Result<&'a str, OfffError> {
+    let row = index
+        .iter()
+        .find(|r| r.object_id == object_id)
+        .ok_or_else(|| {
+            OfffError::InvalidContainer(format!(
+                "object_id '{object_id}' not found in index"
+            ))
+        })?;
+    row.storage_ref.as_deref().ok_or_else(|| {
+        OfffError::InvalidContainer(format!(
+            "object_id '{object_id}' has no storage_ref"
+        ))
+    })
 }
 
 fn s3_client() -> Result<Client, OfffError> {

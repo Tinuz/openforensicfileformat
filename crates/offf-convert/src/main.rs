@@ -17,7 +17,7 @@ use offf_core::{
     parquet_io::{write_leaves, write_physical_to_chunk},
     provenance::ProvenanceWriter,
     types::{
-        AcquisitionJson, AcquisitionParameters, AcquisitionSource, ChunkingInfo, Compression,
+        self, AcquisitionJson, AcquisitionParameters, AcquisitionSource, ChunkingInfo, Compression,
         EvidenceStreamInfo, ManifestHashes, ManifestIndexes, ManifestJson, SourceContainerInfo,
         SourceInfo, ToolInfo, OFFF_VERSION, TOOL_VERSION,
     },
@@ -256,16 +256,21 @@ fn convert(args: Args) -> Result<()> {
         // ── Phase 5: acquisition.json ──────────────────────────────────────
         let acquisition = AcquisitionJson {
             container_id: container_id.clone(),
+            acquisition_id: None,
+            acquisition_mode: Some("block_image".to_string()),
             acquired_at: now,
+            acquired_by: None,
+            method: None,
             tool: ToolInfo {
                 name: TOOL_NAME.to_string(),
                 version: TOOL_VERSION.to_string(),
             },
-            source: AcquisitionSource {
+            source: Some(AcquisitionSource {
                 path: input_path.display().to_string(),
                 size_bytes: source_size,
                 sha256: source_sha256.clone(),
-            },
+            }),
+            source_context: None,
             source_container: e01_container_sha256.as_ref().map(|h| SourceContainerInfo {
                 container_type: "E01".to_string(),
                 container_sha256: h.clone(),
@@ -279,13 +284,14 @@ fn convert(args: Args) -> Result<()> {
             } else {
                 None
             },
-            parameters: AcquisitionParameters {
+            parameters: Some(AcquisitionParameters {
                 chunk_size,
                 sector_size: args.sector_size,
                 compression: compression.as_str().to_string(),
                 hash_algorithm: "sha256".to_string(),
                 deterministic: args.deterministic,
-            },
+            }),
+            limitations: None,
         };
 
         let acq_json = serde_json::to_string_pretty(&acquisition)
@@ -347,26 +353,31 @@ fn convert(args: Args) -> Result<()> {
                 name: TOOL_NAME.to_string(),
                 version: TOOL_VERSION.to_string(),
             },
-            source: SourceInfo {
+            acquisition_mode: Some(crate::types::AcquisitionMode::BlockImage),
+            source: Some(SourceInfo {
                 source_type: match input_kind {
                     InputKind::Raw => "raw_image".to_string(),
                     InputKind::E01 => "e01_image".to_string(),
                 },
                 size_bytes: source_size,
                 sector_size: args.sector_size,
-            },
-            hashes: ManifestHashes {
+            }),
+            hashes: Some(ManifestHashes {
                 source_sha256: source_sha256.clone(),
                 merkle_root_sha256: merkle_root.clone(),
-            },
-            chunking: ChunkingInfo {
+            }),
+            chunking: Some(ChunkingInfo {
                 chunk_size,
                 chunking_mode: "fixed".to_string(),
                 compression: compression.as_str().to_string(),
                 hash_algorithm: "sha256".to_string(),
-            },
+            }),
+            evidence_roots: None,
+            limitations: None,
             indexes: ManifestIndexes {
-                physical_to_chunk: "maps/physical_to_chunk.parquet".to_string(),
+                physical_to_chunk: Some("maps/physical_to_chunk.parquet".to_string()),
+                object_index: None,
+                object_edges: None,
             },
             extensions: None,
         };

@@ -11,6 +11,7 @@ use sha2::{Digest, Sha256};
 
 use offf_core::{
     chunk::verify_chunk,
+    evidence::read_evidence_object,
     hash::{generate_merkle_proof, parse_and_validate_merkle_tree, verify_merkle_proof},
     lineage::ObjectLineageValidator,
     parquet_io::{
@@ -18,7 +19,7 @@ use offf_core::{
         read_physical_to_chunk, read_physical_to_chunk_bytes,
     },
     storage::{derived_object_path, read_chunk_verified, ContainerRef},
-    types::{AcquisitionJson, ManifestJson, OFFF_V2_VERSION, OFFF_VERSION},
+    types::{AcquisitionJson, AcquisitionMode, ManifestJson, OFFF_V2_VERSION, OFFF_VERSION},
 };
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
@@ -313,10 +314,22 @@ fn verify(
     }
 
     // ── Check 3-6: Load mapping table and verify chunk presence/hashes ─────
-    let all_chunks = match container.local_path(&manifest.indexes.physical_to_chunk) {
+    // Branch on acquisition_mode: skip block-image checks for file_collection.
+    let effective_mode = manifest.effective_mode();
+    if matches!(effective_mode, AcquisitionMode::FileCollection) {
+        verify_file_collection(&manifest, &container, &mut report);
+        return Ok(report.is_valid());
+    }
+
+    let ptc_path = manifest
+        .indexes
+        .physical_to_chunk
+        .as_deref()
+        .unwrap_or("maps/physical_to_chunk.parquet");
+    let all_chunks = match container.local_path(ptc_path) {
         Some(p) => read_physical_to_chunk(&p),
         None => {
-            let data = container.read_bytes(&manifest.indexes.physical_to_chunk);
+            let data = container.read_bytes(ptc_path);
             data.and_then(|d| read_physical_to_chunk_bytes(&d))
         }
     };
@@ -491,15 +504,17 @@ fn verify(
                         report.ok("Merkle leaves match physical_to_chunk order");
                     }
 
-                    if tree.root == manifest.hashes.merkle_root_sha256 {
+                    if tree.root == manifest.hashes.as_ref().map(|h| h.merkle_root_sha256.as_str()).unwrap_or("") {
                         report.ok(format!("Merkle root: {}", &tree.root[..16]));
+                    } else if manifest.hashes.is_none() {
+                        report.warn("Merkle root", "skipped: no hashes section in manifest");
                     } else {
                         report.fail(
                             "Merkle root",
                             format!(
                                 "tree root ({}) differs from manifest ({})",
                                 &tree.root[..16],
-                                &manifest.hashes.merkle_root_sha256[..16]
+                                &manifest.hashes.as_ref().unwrap().merkle_root_sha256[..16]
                             ),
                         );
                     }
@@ -521,7 +536,7 @@ fn verify(
                                 &chunk.plaintext_sha256,
                                 chunk.sequence,
                                 &proof,
-                                &manifest.hashes.merkle_root_sha256,
+                                manifest.hashes.as_ref().map(|h| h.merkle_root_sha256.as_str()).unwrap_or(""),
                             ) {
                                 Ok(true) => {
                                     report.ok(format!(
@@ -578,20 +593,22 @@ fn verify(
 
         if hash_ok {
             let computed = format!("{:x}", source_hasher.finalize());
-            if computed == manifest.hashes.source_sha256 {
-                report.ok(format!(
-                    "Source SHA-256: {}",
-                    &manifest.hashes.source_sha256[..16]
-                ));
-            } else {
-                report.fail(
-                    "Source SHA-256",
-                    format!(
-                        "computed {}, manifest has {}",
-                        &computed[..16],
-                        &manifest.hashes.source_sha256[..16]
-                    ),
-                );
+            match manifest.hashes.as_ref() {
+                Some(h) => {
+                    if computed == h.source_sha256 {
+                        report.ok(format!("Source SHA-256: {}", &h.source_sha256[..16]));
+                    } else {
+                        report.fail(
+                            "Source SHA-256",
+                            format!(
+                                "computed {}, manifest has {}",
+                                &computed[..16],
+                                &h.source_sha256[..16]
+                            ),
+                        );
+                    }
+                }
+                None => report.warn("Source SHA-256", "skipped: no hashes section in manifest"),
             }
         }
     }
@@ -665,7 +682,163 @@ fn includes_schemas(profile: VerifyProfile) -> bool {
     )
 }
 
-// ── Object lineage verification ───────────────────────────────────────────────
+// ── File-collection container verification ────────────────────────────────────
+
+fn verify_file_collection(
+    manifest: &ManifestJson,
+    container: &ContainerRef,
+    report: &mut VerifyReport,
+) {
+    // Check: evidence_roots present
+    match &manifest.evidence_roots {
+        Some(roots) if !roots.is_empty() => {
+            report.ok(format!("evidence_roots: {} root(s) declared", roots.len()));
+        }
+        _ => {
+            report.fail(
+                "evidence_roots",
+                "file_collection manifest must have at least one evidence_root",
+            );
+        }
+    }
+
+    // Check: limitations present
+    match &manifest.limitations {
+        Some(lims) if !lims.is_empty() => {
+            report.ok(format!("limitations: {} item(s) declared", lims.len()));
+        }
+        _ => report.warn(
+            "limitations",
+            "file_collection should declare known limitations",
+        ),
+    }
+
+    // Check: object_index path declared and readable
+    let oi_path = match &manifest.indexes.object_index {
+        Some(p) => p.clone(),
+        None => {
+            report.fail(
+                "indexes.object_index",
+                "file_collection manifest must declare indexes.object_index",
+            );
+            return;
+        }
+    };
+
+    let object_rows = match container.local_path(&oi_path) {
+        Some(p) => match read_object_index(&p) {
+            Ok(rows) => {
+                report.ok(format!("object_index: {} row(s)", rows.len()));
+                rows
+            }
+            Err(e) => {
+                report.fail("object_index readable", e.to_string());
+                return;
+            }
+        },
+        None => {
+            // S3 path: just check existence
+            match container.read_bytes(&oi_path) {
+                Ok(_) => {
+                    report.ok("object_index: present (S3, not parsed)");
+                    return;
+                }
+                Err(e) => {
+                    report.fail("object_index readable", e.to_string());
+                    return;
+                }
+            }
+        }
+    };
+
+    // Check: object_edges path declared and readable
+    let oe_path = match &manifest.indexes.object_edges {
+        Some(p) => p.clone(),
+        None => {
+            report.fail(
+                "indexes.object_edges",
+                "file_collection manifest must declare indexes.object_edges",
+            );
+            return;
+        }
+    };
+    if let Some(p) = container.local_path(&oe_path) {
+        match read_object_edges(&p) {
+            Ok(edges) => report.ok(format!("object_edges: {} edge(s)", edges.len())),
+            Err(e) => report.fail("object_edges readable", e.to_string()),
+        }
+    } else {
+        match container.read_bytes(&oe_path) {
+            Ok(_) => report.ok("object_edges: present (S3, not parsed)"),
+            Err(e) => report.fail("object_edges readable", e.to_string()),
+        }
+    }
+
+    // Check: collection_root object present in index
+    let root_ids: std::collections::HashSet<&str> = manifest
+        .evidence_roots
+        .as_ref()
+        .map(|r| r.iter().map(|e| e.root_id.as_str()).collect())
+        .unwrap_or_default();
+
+    let root_in_index = object_rows
+        .iter()
+        .any(|r| root_ids.contains(r.object_id.as_str()));
+    if root_in_index {
+        report.ok("collection_root object in object_index");
+    } else {
+        report.fail(
+            "collection_root in object_index",
+            "no row with object_type=collection_root matching evidence_roots root_id",
+        );
+    }
+
+    // Check: storage_refs exist on disk and SHA-256 matches
+    let base_path = match container {
+        ContainerRef::Local(p) => Some(p.clone()),
+        ContainerRef::S3 { .. } => None,
+    };
+
+    if let Some(base) = &base_path {
+        let mut ok_count = 0usize;
+        let mut fail_count = 0usize;
+        for row in &object_rows {
+            if row.object_type == "collection_root" {
+                continue;
+            }
+            let sha256_ref = match row.storage_ref.as_deref() {
+                Some(s) => s,
+                None => {
+                    fail_count += 1;
+                    report.fail(
+                        "storage_ref present",
+                        format!("object '{}' has no storage_ref", row.object_id),
+                    );
+                    continue;
+                }
+            };
+            match read_evidence_object(base, sha256_ref) {
+                Ok(_) => ok_count += 1,
+                Err(e) => {
+                    fail_count += 1;
+                    report.fail(
+                        "evidence object integrity",
+                        format!("object '{}': {e}", row.object_id),
+                    );
+                }
+            }
+        }
+        if fail_count == 0 && ok_count > 0 {
+            report.ok(format!("evidence objects: {ok_count} verified"));
+        } else if ok_count == 0 && fail_count == 0 {
+            report.warn("evidence objects", "no file objects found");
+        }
+    } else {
+        report.warn("evidence objects", "S3 storage_ref verification not implemented");
+    }
+}
+
+
 
 fn verify_object_lineage(
     container_arg: &str,

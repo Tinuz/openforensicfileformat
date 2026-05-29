@@ -558,6 +558,40 @@ class OfffContainer:
         """Read ``indexes/objects/object_edges.parquet`` → list of dicts."""
         return self._read_parquet_as_dicts("indexes/objects/object_edges.parquet")
 
+    def read_evidence_file(self, sha256_hex: str) -> bytes:
+        """Read a content-addressed evidence object from the evidence store.
+
+        The object must be stored at ``evidence/objects/sha256/{ab}/{cd}/{hex}.bin``.
+        Raises ``ValueError`` if the file is not found or the hash does not match.
+        """
+        sha = sha256_hex.lower()
+        path = self.base_path / "evidence" / "objects" / "sha256" / sha[:2] / sha[2:4] / f"{sha}.bin"
+        if not path.exists():
+            raise FileNotFoundError(f"Evidence object not found: {sha256_hex}")
+        data = path.read_bytes()
+        actual = hashlib.sha256(data).hexdigest()
+        if actual != sha:
+            raise ValueError(f"Evidence object hash mismatch: expected {sha}, got {actual}")
+        return data
+
+    def list_evidence_objects(self) -> list[dict[str, Any]]:
+        """Return a list of dicts describing all evidence objects in this container.
+
+        Each dict has keys: ``sha256``, ``size_bytes``, ``path``.
+        """
+        base = self.base_path / "evidence" / "objects" / "sha256"
+        if not base.exists():
+            return []
+        results = []
+        for bin_file in sorted(base.rglob("*.bin")):
+            sha = bin_file.stem
+            results.append({
+                "sha256": sha,
+                "size_bytes": bin_file.stat().st_size,
+                "path": str(bin_file.relative_to(self.base_path)),
+            })
+        return results
+
     def read_derivations(self) -> list[dict[str, Any]]:
         """Read ``indexes/objects/derivations.parquet`` → list of dicts."""
         return self._read_parquet_as_dicts("indexes/objects/derivations.parquet")

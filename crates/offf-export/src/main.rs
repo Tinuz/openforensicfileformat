@@ -113,7 +113,9 @@ fn export(base: &Path, output: &Path) -> Result<()> {
         serde_json::from_str(&manifest_raw).context("invalid manifest.json")?;
 
     // ── Load chunk map ─────────────────────────────────────────────────────
-    let map_path = base.join(&manifest.indexes.physical_to_chunk);
+    let map_path = base.join(
+        manifest.indexes.physical_to_chunk.as_deref().unwrap_or("maps/physical_to_chunk.parquet")
+    );
     let chunks =
         read_physical_to_chunk(&map_path).context("failed to read physical_to_chunk.parquet")?;
 
@@ -152,8 +154,17 @@ fn export(base: &Path, output: &Path) -> Result<()> {
     // ── Verify output hash ─────────────────────────────────────────────────
     let computed = format!("{:x}", source_hasher.finalize());
     println!();
-    if computed == manifest.hashes.source_sha256 {
+    let expected_sha256 = manifest
+        .hashes
+        .as_ref()
+        .map(|h| h.source_sha256.as_str())
+        .unwrap_or("");
+    if computed == expected_sha256 {
         println!("Source SHA-256: {} ✓ MATCH", &computed[..32]);
+        println!();
+        println!("Export complete: {}", output.display());
+    } else if expected_sha256.is_empty() {
+        println!("Source SHA-256: {} (no manifest hash to verify against)", &computed[..32]);
         println!();
         println!("Export complete: {}", output.display());
     } else {
@@ -161,7 +172,7 @@ fn export(base: &Path, output: &Path) -> Result<()> {
         let _ = fs::remove_file(output);
         anyhow::bail!(
             "source hash MISMATCH\n  expected: {}\n  computed: {}",
-            manifest.hashes.source_sha256,
+            expected_sha256,
             computed
         );
     }

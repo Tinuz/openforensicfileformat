@@ -262,24 +262,29 @@ fn build_case_fixture(root: &Path) -> Result<Fixture, Box<dyn std::error::Error>
             name: "grpc-smoke-test".to_string(),
             version: "0.1.0".to_string(),
         },
-        source: SourceInfo {
+        source: Some(SourceInfo {
             source_type: "raw_image".to_string(),
             size_bytes: chunk.source_length,
             sector_size: 512,
-        },
-        hashes: ManifestHashes {
+        }),
+        hashes: Some(ManifestHashes {
             source_sha256: chunk.plaintext_sha256.clone(),
             merkle_root_sha256: chunk.plaintext_sha256.clone(),
-        },
-        chunking: ChunkingInfo {
+        }),
+        chunking: Some(ChunkingInfo {
             chunk_size: chunk.source_length,
             chunking_mode: "fixed".to_string(),
             compression: "none".to_string(),
             hash_algorithm: "sha256".to_string(),
-        },
+        }),
         indexes: ManifestIndexes {
-            physical_to_chunk: "maps/physical_to_chunk.parquet".to_string(),
+            physical_to_chunk: Some("maps/physical_to_chunk.parquet".to_string()),
+            object_index: None,
+            object_edges: None,
         },
+        acquisition_mode: None,
+        evidence_roots: None,
+        limitations: None,
         extensions: None,
     };
 

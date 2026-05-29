@@ -99,24 +99,29 @@ fn convert_image(
             name: "offf-integration-test".to_string(),
             version: TOOL_VERSION.to_string(),
         },
-        source: SourceInfo {
+        source: Some(SourceInfo {
             source_type: "raw_image".to_string(),
             size_bytes: source_size,
             sector_size: 512,
-        },
-        hashes: ManifestHashes {
+        }),
+        hashes: Some(ManifestHashes {
             source_sha256: source_sha256.clone(),
             merkle_root_sha256: root,
-        },
-        chunking: ChunkingInfo {
+        }),
+        chunking: Some(ChunkingInfo {
             chunk_size,
             chunking_mode: "fixed".to_string(),
             compression: compression.as_str().to_string(),
             hash_algorithm: "sha256".to_string(),
-        },
+        }),
         indexes: ManifestIndexes {
-            physical_to_chunk: "maps/physical_to_chunk.parquet".to_string(),
+            physical_to_chunk: Some("maps/physical_to_chunk.parquet".to_string()),
+            object_index: None,
+            object_edges: None,
         },
+        acquisition_mode: None,
+        evidence_roots: None,
+        limitations: None,
         extensions: None,
     };
     fs::write(
@@ -128,22 +133,28 @@ fn convert_image(
     // Acquisition
     let acquisition = AcquisitionJson {
         container_id: manifest.container_id.clone(),
+        acquisition_id: None,
+        acquisition_mode: None,
         acquired_at: manifest.created_at,
+        acquired_by: None,
+        method: None,
         tool: manifest.created_by_tool.clone(),
-        source: AcquisitionSource {
+        source: Some(AcquisitionSource {
             path: image.display().to_string(),
             size_bytes: source_size,
             sha256: source_sha256,
-        },
+        }),
+        source_context: None,
         source_container: None,
         evidence_stream: None,
-        parameters: AcquisitionParameters {
+        parameters: Some(AcquisitionParameters {
             chunk_size,
             sector_size: 512,
             compression: compression.as_str().to_string(),
             hash_algorithm: "sha256".to_string(),
             deterministic: true,
-        },
+        }),
+        limitations: None,
     };
     fs::write(
         container.join("acquisition.json"),
@@ -173,7 +184,9 @@ fn export_image(container: &Path, out: &Path) -> String {
             .unwrap();
 
     let chunks =
-        read_physical_to_chunk(&container.join(&manifest.indexes.physical_to_chunk)).unwrap();
+        read_physical_to_chunk(&container.join(
+            manifest.indexes.physical_to_chunk.as_deref().unwrap_or("maps/physical_to_chunk.parquet")
+        )).unwrap();
 
     let mut out_file = fs::File::create(out).unwrap();
     let mut source_hasher = Sha256::new();
@@ -291,12 +304,12 @@ fn merkle_root_matches_manifest() {
     // Recompute Merkle root from chunk metadata
     let leaves: Vec<String> = chunks.iter().map(|c| c.plaintext_sha256.clone()).collect();
     let computed_root = merkle_root(&leaves).unwrap();
-    assert_eq!(computed_root, manifest.hashes.merkle_root_sha256);
+    assert_eq!(computed_root, manifest.hashes.as_ref().unwrap().merkle_root_sha256);
 
     // Also verify the binary file
     let blob = fs::read(container.join("hashes/merkle_tree.bin")).unwrap();
     let bin_root = deserialize_merkle_root(&blob).unwrap();
-    assert_eq!(bin_root, manifest.hashes.merkle_root_sha256);
+    assert_eq!(bin_root, manifest.hashes.as_ref().unwrap().merkle_root_sha256);
 }
 
 #[test]
@@ -519,7 +532,7 @@ fn mbr_partition_table_detected() {
     let table = detect_and_parse(
         &container,
         &chunks,
-        manifest.source.sector_size,
+        manifest.source.as_ref().map(|s| s.sector_size).unwrap_or(512),
         &manifest.container_id,
         "test",
     )
@@ -612,7 +625,7 @@ fn gpt_partition_table_detected() {
     let table = detect_and_parse(
         &container,
         &chunks,
-        manifest.source.sector_size,
+        manifest.source.as_ref().map(|s| s.sector_size).unwrap_or(512),
         &manifest.container_id,
         "test",
     )
@@ -660,7 +673,7 @@ fn gpt_partition_table_json_written() {
     let table = detect_and_parse(
         &container,
         &chunks,
-        manifest.source.sector_size,
+        manifest.source.as_ref().map(|s| s.sector_size).unwrap_or(512),
         &manifest.container_id,
         "test",
     )
@@ -738,6 +751,11 @@ fn make_object(id: &str) -> DiscoveredObjectRow {
         source_layer: "carved".to_string(),
         storage_ref: None,
         root_source_ref: None,
+        root_id: None,
+        collection_relative_path: None,
+        original_created_at: None,
+        original_modified_at: None,
+        original_accessed_at: None,
         created_by_job_id: Some("job-1".to_string()),
         parser_status: "ok".to_string(),
         provenance_ref: None,
@@ -866,24 +884,29 @@ fn make_manifest(offf_version: &str) -> ManifestJson {
             name: "offf-convert".to_string(),
             version: "0.1.0".to_string(),
         },
-        source: SourceInfo {
+        source: Some(SourceInfo {
             source_type: "raw_image".to_string(),
             size_bytes: 1024 * 1024,
             sector_size: 512,
-        },
-        hashes: ManifestHashes {
+        }),
+        hashes: Some(ManifestHashes {
             source_sha256: "a".repeat(64),
             merkle_root_sha256: "b".repeat(64),
-        },
-        chunking: ChunkingInfo {
+        }),
+        chunking: Some(ChunkingInfo {
             chunk_size: 512 * 1024,
             chunking_mode: "fixed".to_string(),
             compression: "none".to_string(),
             hash_algorithm: "sha256".to_string(),
-        },
+        }),
         indexes: ManifestIndexes {
-            physical_to_chunk: "maps/physical_to_chunk.parquet".to_string(),
+            physical_to_chunk: Some("maps/physical_to_chunk.parquet".to_string()),
+            object_index: None,
+            object_edges: None,
         },
+        acquisition_mode: None,
+        evidence_roots: None,
+        limitations: None,
         extensions: None,
     }
 }
