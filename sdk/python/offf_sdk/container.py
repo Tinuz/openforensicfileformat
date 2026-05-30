@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import collections
 import hashlib
+import io
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -198,7 +199,8 @@ class OfffContainer:
         if chunk.compression == "none":
             plain = stored
         elif chunk.compression == "zstd":
-            plain = zstd.ZstdDecompressor().decompress(stored)
+            with zstd.ZstdDecompressor().stream_reader(io.BytesIO(stored)) as reader:
+                plain = reader.read()
         else:
             raise OfffError(f"unsupported compression in chunk map: {chunk.compression}")
 
