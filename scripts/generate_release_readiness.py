@@ -35,6 +35,138 @@ MATURITY_RANK = {
 FORENSIC_READY = {"forensic-grade-candidate", "forensic-grade"}
 RELEASE_1_0_IN_SCOPE_CLASSIFICATIONS = {"core", "reference"}
 
+RELEASE_1_0_BACKLOG = [
+    {
+        "priority": "P0",
+        "title": "Freeze 1.0 scope and gate metadata",
+        "components": [
+            "conformance-suite",
+            "extension-model",
+            "offf-access-service",
+            "offf-annotate",
+            "offf-collect",
+            "offf-convert",
+            "offf-export",
+            "offf-index",
+            "offf-jobs",
+            "offf-keyword-worker",
+            "offf-yara-worker",
+            "packed-container",
+            "python-sdk",
+            "go-sdk",
+            "tool-registry",
+            "worker-runtime-state",
+        ],
+        "files": [
+            "components.toml",
+            "docs/status.md",
+            "docs/maturity-model.md",
+            "docs/component-classification.md",
+            "docs/test-traceability.md",
+            "docs/evidence-of-done.md",
+            "README.md",
+            ".github/workflows/offf-ci.yml",
+            "scripts/check_component_metadata.py",
+            "scripts/check_test_traceability.py",
+            "scripts/generate_release_readiness.py",
+        ],
+        "tests": [
+            "python scripts/check_component_metadata.py",
+            "python scripts/check_test_traceability.py",
+            "python scripts/generate_release_readiness.py",
+        ],
+        "acceptance": "1.0 scope is explicit, the release gate is reproducible, and the readiness report is authoritative.",
+    },
+    {
+        "priority": "P1",
+        "title": "Promote stable reference path components",
+        "components": [
+            "conformance-suite",
+            "extension-model",
+            "offf-convert",
+            "offf-export",
+            "offf-index",
+            "offf-jobs",
+            "packed-container",
+        ],
+        "files": [
+            "crates/offf-core/src/extensions.rs",
+            "crates/offf-core/src/packed.rs",
+            "crates/offf-convert/src/main.rs",
+            "crates/offf-export/src/main.rs",
+            "crates/offf-index/src/main.rs",
+            "crates/offf-jobs/src/main.rs",
+            "docs/conformance-profiles.md",
+            "docs/test-traceability.md",
+        ],
+        "tests": [
+            "cargo test -p offf-core",
+            "cargo test -p offf-convert",
+            "cargo test -p offf-export",
+            "cargo test -p offf-index",
+            "cargo test -p offf-jobs",
+            "cargo test -p offf-integration-tests",
+            "python tests/conformance/run_conformance.py",
+        ],
+        "acceptance": "Production/reference path components can be defended as release-stable or explicitly fenced with documented limits.",
+    },
+    {
+        "priority": "P2",
+        "title": "Fence experimental production surfaces",
+        "components": [
+            "offf-access-service",
+            "offf-annotate",
+            "offf-collect",
+            "offf-keyword-worker",
+            "offf-yara-worker",
+        ],
+        "files": [
+            "crates/offf-access-service/src/main.rs",
+            "crates/offf-annotate/src/main.rs",
+            "crates/offf-collect/src/main.rs",
+            "crates/offf-keyword-worker/src/main.rs",
+            "crates/offf-yara-worker/src/main.rs",
+            "docs/object-content-ref.md",
+            "docs/filesystem-to-object-graph.md",
+            "docs/conformance-profiles.md",
+        ],
+        "tests": [
+            "cargo test -p offf-access-service",
+            "cargo test -p offf-annotate",
+            "cargo test -p offf-collect",
+            "cargo test -p offf-keyword-worker",
+            "cargo test -p offf-yara-worker",
+            "python tests/e2e/run_cli_e2e.py",
+        ],
+        "acceptance": "Experimental surfaces are either promoted with evidence or clearly fenced from the 1.0 guarantee.",
+    },
+    {
+        "priority": "P3",
+        "title": "Stabilize SDK and governance surfaces",
+        "components": [
+            "python-sdk",
+            "go-sdk",
+            "tool-registry",
+            "worker-runtime-state",
+        ],
+        "files": [
+            "sdk/python/offf_sdk/container.py",
+            "sdk/python/offf_sdk/api.py",
+            "sdk/python/tests/test_api_contract.py",
+            "sdk/python/tests/test_container_chunk_reader.py",
+            "sdk/go/sdk.go",
+            "sdk/go/sdk_test.go",
+            "config/tool-registry.example.json",
+            "docs/reference-worker-runtime.md",
+        ],
+        "tests": [
+            "python -m unittest sdk/python/tests/test_api_contract.py sdk/python/tests/test_container_chunk_reader.py",
+            "go test ./...",
+        ],
+        "acceptance": "SDKs and governance metadata have a stable, tested minimum contract for 1.0 consumers.",
+    },
+]
+
 
 def main() -> int:
     if not COMPONENTS_TOML.exists():
@@ -118,6 +250,7 @@ def main() -> int:
             "ready_count": len(release_1_0_ready),
             "blocker_count": len(release_1_0_blockers),
             "out_of_scope_count": len(release_1_0_out_of_scope),
+            "backlog": RELEASE_1_0_BACKLOG,
         },
     }
 
@@ -221,6 +354,29 @@ def main() -> int:
         lines += ["### Out of scope", ""]
         for name in sorted(release_1_0_out_of_scope):
             lines.append(f"- {name}")
+
+    lines += [
+        "",
+        "## 1.0 backlog",
+        "",
+        "The backlog below is ordered by delivery priority, not by component size.",
+        "",
+    ]
+    for item in RELEASE_1_0_BACKLOG:
+        lines += [
+            f"### {item['priority']} — {item['title']}",
+            "",
+            f"**Components:** {', '.join(item['components'])}",
+            "",
+            "**Minimal files:**",
+            "",
+        ]
+        for path in item["files"]:
+            lines.append(f"- {path}")
+        lines += ["", "**Minimal tests:**", ""]
+        for test in item["tests"]:
+            lines.append(f"- {test}")
+        lines += ["", f"**Acceptance:** {item['acceptance']}", ""]
 
     lines += ["", "---", "", f"*Generated by `scripts/generate_release_readiness.py`*", ""]
 
