@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-05-29T15:04:20Z",
+  "generated_at": "2026-05-31T20:56:41Z",
   "total_components": 22,
   "by_classification": {
     "core": [
@@ -183,5 +183,127 @@
       "type": "missing-docs"
     }
   ],
-  "gap_count": 11
+  "gap_count": 11,
+  "release_1_0": {
+    "scope_classifications": [
+      "core",
+      "reference"
+    ],
+    "ready": [
+      "evidence-container-schema",
+      "object-lineage-model",
+      "offf-convert",
+      "offf-core",
+      "offf-verify",
+      "schema-catalog"
+    ],
+    "blockers": [
+      {
+        "component": "conformance-suite",
+        "blockers": [
+          "maturity=reference"
+        ]
+      },
+      {
+        "component": "extension-model",
+        "blockers": [
+          "maturity=reference"
+        ]
+      },
+      {
+        "component": "go-sdk",
+        "blockers": [
+          "maturity=experimental",
+          "missing-docs"
+        ]
+      },
+      {
+        "component": "offf-access-service",
+        "blockers": [
+          "maturity=experimental",
+          "missing-docs"
+        ]
+      },
+      {
+        "component": "offf-annotate",
+        "blockers": [
+          "maturity=experimental",
+          "missing-docs"
+        ]
+      },
+      {
+        "component": "offf-collect",
+        "blockers": [
+          "maturity=experimental",
+          "missing-docs"
+        ]
+      },
+      {
+        "component": "offf-export",
+        "blockers": [
+          "maturity=reference"
+        ]
+      },
+      {
+        "component": "offf-index",
+        "blockers": [
+          "maturity=reference"
+        ]
+      },
+      {
+        "component": "offf-jobs",
+        "blockers": [
+          "maturity=reference"
+        ]
+      },
+      {
+        "component": "offf-keyword-worker",
+        "blockers": [
+          "maturity=experimental",
+          "missing-docs"
+        ]
+      },
+      {
+        "component": "offf-yara-worker",
+        "blockers": [
+          "maturity=experimental",
+          "missing-docs"
+        ]
+      },
+      {
+        "component": "packed-container",
+        "blockers": [
+          "maturity=reference"
+        ]
+      },
+      {
+        "component": "python-sdk",
+        "blockers": [
+          "maturity=experimental",
+          "missing-docs"
+        ]
+      },
+      {
+        "component": "tool-registry",
+        "blockers": [
+          "maturity=experimental",
+          "missing-tests",
+          "missing-docs"
+        ]
+      },
+      {
+        "component": "worker-runtime-state",
+        "blockers": [
+          "maturity=experimental",
+          "missing-tests"
+        ]
+      }
+    ],
+    "out_of_scope": [
+      "demo-scripts"
+    ],
+    "ready_count": 6,
+    "blocker_count": 15,
+    "out_of_scope_count": 1
+  }
 }

@@ -1,6 +1,6 @@
 # OFFF Release Readiness Report
 
-Generated: 2026-05-29T15:04:20Z
+Generated: 2026-05-31T20:56:41Z
 
 **Total components:** 22
 
@@ -66,6 +66,47 @@ Generated: 2026-05-29T15:04:20Z
 | tool-registry | missing-tests |
 | tool-registry | missing-docs |
 | demo-scripts | missing-docs |
+
+## 1.0 readiness
+
+Scope policy: core and reference components are in scope for the first 1.0 release; demo, experimental, and legacy components are out of scope unless promoted.
+
+**Ready:** 6
+**Blockers:** 15
+**Out of scope:** 1
+
+### Ready components
+
+- **evidence-container-schema** (`forensic-grade-candidate`)
+- **object-lineage-model** (`forensic-grade-candidate`)
+- **offf-convert** (`forensic-grade-candidate`)
+- **offf-core** (`forensic-grade-candidate`)
+- **offf-verify** (`forensic-grade-candidate`)
+- **schema-catalog** (`forensic-grade-candidate`)
+
+### Blockers
+
+| Component | Blockers |
+|---|---|
+| conformance-suite | maturity=reference |
+| extension-model | maturity=reference |
+| go-sdk | maturity=experimental, missing-docs |
+| offf-access-service | maturity=experimental, missing-docs |
+| offf-annotate | maturity=experimental, missing-docs |
+| offf-collect | maturity=experimental, missing-docs |
+| offf-export | maturity=reference |
+| offf-index | maturity=reference |
+| offf-jobs | maturity=reference |
+| offf-keyword-worker | maturity=experimental, missing-docs |
+| offf-yara-worker | maturity=experimental, missing-docs |
+| packed-container | maturity=reference |
+| python-sdk | maturity=experimental, missing-docs |
+| tool-registry | maturity=experimental, missing-tests, missing-docs |
+| worker-runtime-state | maturity=experimental, missing-tests |
+
+### Out of scope
+
+- demo-scripts
 
 ---
 
