@@ -1471,3 +1471,52 @@ fn filesystem_to_object_graph_pipeline_builds_and_reads_verified() {
     let bytes = read_object_verified(&case_path, &object.object_id).unwrap();
     assert_eq!(bytes.len() as u64, object.size_bytes.unwrap_or(0));
 }
+
+#[test]
+fn verify_writes_stable_report_json_contract_by_default() {
+    let tmp = TempDir::new().unwrap();
+    let image = make_image(tmp.path(), "verify-report.bin", 8192);
+    let container = tmp.path().join("verify-report.case.offf");
+    convert_image(&image, &container, 1024, Compression::Zstd);
+
+    let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..");
+
+    let status = Command::new("cargo")
+        .current_dir(&workspace_root)
+        .arg("run")
+        .arg("-p")
+        .arg("offf-verify")
+        .arg("--")
+        .arg(container.to_string_lossy().to_string())
+        .status()
+        .unwrap();
+    assert!(status.success(), "offf-verify should succeed for a valid container");
+
+    let report_path = container.join("reports/verify/verify_report.json");
+    assert!(report_path.exists(), "expected stable verify report path to be written");
+
+    let payload: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&report_path).unwrap()).unwrap();
+    let manifest: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(container.join("manifest.json")).unwrap())
+            .unwrap();
+
+    assert_eq!(payload["schema_version"], serde_json::Value::String("1.0.0".to_string()));
+    assert_eq!(payload["verifier_name"], serde_json::Value::String("offf-verify".to_string()));
+    assert_eq!(payload["case_id"], manifest["container_id"]);
+    assert_eq!(payload["overall_status"], serde_json::Value::String("pass".to_string()));
+    assert!(payload["started_at"].as_str().is_some());
+    assert!(payload["completed_at"].as_str().is_some());
+
+    let checks = payload["checks"].as_array().expect("checks must be an array");
+    assert!(!checks.is_empty(), "verify report must contain checks");
+
+    let first_check = &checks[0];
+    assert!(first_check["id"].as_str().is_some());
+    assert!(first_check["name"].as_str().is_some());
+    assert!(first_check["status"].as_str().is_some());
+    assert!(first_check["severity"].as_str().is_some());
+    assert!(first_check["message"].as_str().is_some());
+}

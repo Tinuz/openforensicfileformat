@@ -6,6 +6,7 @@ use std::{
 
 use anyhow::Result;
 use base64ct::{Base64UrlUnpadded, Encoding};
+use chrono::{SecondsFormat, Utc};
 use clap::{Parser, ValueEnum};
 use hmac::{Hmac, Mac};
 use serde::Serialize;
@@ -120,10 +121,15 @@ enum VerifyProfile {
 
 // ── Verification result ───────────────────────────────────────────────────────
 
+const VERIFY_REPORT_SCHEMA_VERSION: &str = "1.0.0";
+const DEFAULT_VERIFY_REPORT_REL_PATH: &str = "reports/verify/verify_report.json";
+
 #[derive(Debug, Serialize)]
 struct VerifyReport {
     container: String,
     profile: VerifyProfile,
+    case_id: Option<String>,
+    started_at: String,
     checks: Vec<CheckResult>,
 }
 
@@ -143,6 +149,20 @@ enum CheckStatus {
 }
 
 impl VerifyReport {
+    fn new(container: String, profile: VerifyProfile) -> Self {
+        Self {
+            container,
+            profile,
+            case_id: None,
+            started_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+            checks: Vec::new(),
+        }
+    }
+
+    fn set_case_id(&mut self, case_id: impl Into<String>) {
+        self.case_id = Some(case_id.into());
+    }
+
     fn ok(&mut self, label: impl Into<String>) {
         self.checks.push(CheckResult {
             label: label.into(),
@@ -208,13 +228,70 @@ impl VerifyReport {
     }
 }
 
+fn default_report_json_path(container_arg: &str) -> Option<PathBuf> {
+    if container_arg.starts_with("s3://") {
+        return None;
+    }
+    Some(PathBuf::from(container_arg).join(DEFAULT_VERIFY_REPORT_REL_PATH))
+}
+
+fn overall_status(report: &VerifyReport) -> &'static str {
+    if report.checks.iter().any(|c| c.status == CheckStatus::Fail) {
+        "fail"
+    } else if report.checks.iter().any(|c| c.status == CheckStatus::Warn) {
+        "warning"
+    } else {
+        "pass"
+    }
+}
+
+fn contract_check_id(index: usize, label: &str) -> String {
+    let mut slug = String::new();
+    let mut last_dash = false;
+    for ch in label.chars().flat_map(|c| c.to_lowercase()) {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch);
+            last_dash = false;
+        } else if !last_dash {
+            slug.push('-');
+            last_dash = true;
+        }
+    }
+    let slug = slug.trim_matches('-');
+    if slug.is_empty() {
+        format!("check-{index:03}")
+    } else {
+        format!("check-{index:03}-{slug}")
+    }
+}
+
+fn contract_check_status(status: &CheckStatus) -> &'static str {
+    match status {
+        CheckStatus::Ok => "pass",
+        CheckStatus::Warn => "warning",
+        CheckStatus::Fail => "fail",
+    }
+}
+
+fn contract_check_severity(status: &CheckStatus) -> &'static str {
+    match status {
+        CheckStatus::Ok => "low",
+        CheckStatus::Warn => "medium",
+        CheckStatus::Fail => "high",
+    }
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 fn main() -> Result<()> {
     let args = Args::parse();
 
     // --report-json is an alias for --report; resolve effective JSON report path.
-    let json_path: Option<PathBuf> = args.report_json.clone().or_else(|| args.report.clone());
+    let json_path: Option<PathBuf> = args
+        .report_json
+        .clone()
+        .or_else(|| args.report.clone())
+        .or_else(|| default_report_json_path(&args.container));
     let md_path: Option<PathBuf> = args.report_md.clone();
 
     // ── Coverage-only mode ────────────────────────────────────────────────────
@@ -277,11 +354,7 @@ fn cmd_verify_parallel_job(
     report_md_path: Option<&std::path::Path>,
 ) -> Result<bool> {
     let container_path = std::path::PathBuf::from(container_arg);
-    let mut report = VerifyReport {
-        container: container_arg.to_string(),
-        profile: VerifyProfile::Core,
-        checks: Vec::new(),
-    };
+    let mut report = VerifyReport::new(container_arg.to_string(), VerifyProfile::Core);
 
     // Check 1: job_manifest.json exists.
     let job_manifest_path = container_path
@@ -314,6 +387,7 @@ fn cmd_verify_parallel_job(
     // Load job manifest and re-resolve scope.
     let job_raw = fs::read_to_string(&job_manifest_path)?;
     if let Ok(job) = serde_json::from_str::<offf_core::types::JobManifest>(&job_raw) {
+        report.set_case_id(job.case_id.clone());
         match resolve_analysis_scope(&container_path, &job) {
             Err(e) => {
                 report.warn("scope_hash", format!("could not re-resolve scope: {e}"));
@@ -499,11 +573,7 @@ fn verify(
     report_md_path: Option<&std::path::Path>,
 ) -> Result<bool> {
     let container = ContainerRef::parse(container_arg)?;
-    let mut report = VerifyReport {
-        container: container.display(),
-        profile,
-        checks: Vec::new(),
-    };
+    let mut report = VerifyReport::new(container.display(), profile);
 
     // ── Check 1: manifest exists and is parseable ──────────────────────────
     let manifest_raw = container.read_text("manifest.json").ok();
@@ -589,6 +659,7 @@ fn verify(
             return Ok(false);
         }
     };
+    report.set_case_id(manifest.container_id.clone());
 
     if profile == VerifyProfile::Objects {
         return verify_objects_profile(
@@ -1407,11 +1478,13 @@ fn verify_object_lineage(
     report_md_path: Option<&std::path::Path>,
 ) -> Result<bool> {
     let container = ContainerRef::parse(container_arg)?;
-    let mut report = VerifyReport {
-        container: container.display(),
-        profile: VerifyProfile::Core,
-        checks: Vec::new(),
-    };
+    let mut report = VerifyReport::new(container.display(), VerifyProfile::Core);
+
+    if let Ok(manifest_raw) = container.read_text("manifest.json") {
+        if let Ok(manifest) = serde_json::from_str::<ManifestJson>(&manifest_raw) {
+            report.set_case_id(manifest.container_id);
+        }
+    }
 
     // ── Load object indexes ───────────────────────────────────────────────
     let idx_rel = "indexes/objects/object_index.parquet";
@@ -2066,8 +2139,33 @@ fn write_json_report(path: &std::path::Path, report: &VerifyReport, valid: bool)
         fs::create_dir_all(parent)?;
     }
     let counts = report.status_counts();
+    let completed_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+    let checks: Vec<_> = report
+        .checks
+        .iter()
+        .enumerate()
+        .map(|(index, check)| {
+            serde_json::json!({
+                "id": contract_check_id(index, &check.label),
+                "name": check.label,
+                "status": contract_check_status(&check.status),
+                "severity": contract_check_severity(&check.status),
+                "message": check.detail.clone().unwrap_or_else(|| check.label.clone()),
+                "evidence_refs": [],
+            })
+        })
+        .collect();
     let payload = serde_json::json!({
+        "schema_version": VERIFY_REPORT_SCHEMA_VERSION,
+        "verifier_name": env!("CARGO_PKG_NAME"),
+        "verifier_version": env!("CARGO_PKG_VERSION"),
+        "case_id": report.case_id.clone().unwrap_or_else(|| report.container.clone()),
+        "started_at": report.started_at,
+        "completed_at": completed_at,
+        "overall_status": overall_status(report),
+        "checks": checks,
         "container": report.container,
+        "container_id": report.case_id.clone().unwrap_or_else(|| report.container.clone()),
         "profile": report.profile,
         "valid": valid,
         "summary": {
@@ -2075,7 +2173,7 @@ fn write_json_report(path: &std::path::Path, report: &VerifyReport, valid: bool)
             "warn": counts.get("warn").copied().unwrap_or(0),
             "fail": counts.get("fail").copied().unwrap_or(0),
         },
-        "checks": report.checks,
+        "legacy_checks": report.checks,
     });
     fs::write(path, serde_json::to_string_pretty(&payload)?)?;
     Ok(())

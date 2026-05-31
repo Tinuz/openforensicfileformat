@@ -214,6 +214,7 @@ cargo run -p offf-jobs -- run --case sample.offf --job sample.offf/jobs/<job_id>
 - Test traceability: `docs/test-traceability.md`
 - Evidence of done: `docs/evidence-of-done.md`
 - Versioning policy: `docs/versioning.md`
+- Verify report contract: `docs/verify-report-contract.md`
 - Filesystem to object graph: `docs/filesystem-to-object-graph.md`
 - Object content refs: `docs/object-content-ref.md`
 - Analysis worker inputs: `docs/analysis-worker-inputs.md`

@@ -10,6 +10,7 @@
     "annotation_event": "offf-annotation-event-0.1.0.schema.json",
     "file_index_row": "offf-file-index-row-0.1.0.schema.json",
     "keyword_hit_row": "offf-keyword-hit-row-0.1.0.schema.json",
-    "yara_hit_row": "offf-yara-hit-row-0.1.0.schema.json"
+    "yara_hit_row": "offf-yara-hit-row-0.1.0.schema.json",
+    "verify_report": "offf-verify-report-1.0.0.schema.json"
   }
 }
