@@ -1473,6 +1473,32 @@ fn filesystem_to_object_graph_pipeline_builds_and_reads_verified() {
 }
 
 #[test]
+fn tool_registry_example_has_expected_capabilities() {
+    let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..");
+    let registry_path = workspace_root.join("config/tool-registry.example.json");
+    let registry: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&registry_path).unwrap()).unwrap();
+
+    let tools = registry["tools"].as_array().expect("tools array present");
+    let worker = tools
+        .iter()
+        .find(|tool| tool["tool_id"] == "example-object-worker")
+        .expect("example-object-worker entry present");
+
+    assert_eq!(worker["status"], "approved");
+    let capabilities = worker["capabilities"]
+        .as_array()
+        .expect("capabilities array present")
+        .iter()
+        .filter_map(|value| value.as_str())
+        .collect::<Vec<_>>();
+    assert!(capabilities.contains(&"may_produce_objects"));
+    assert!(capabilities.contains(&"may_materialize_objects"));
+}
+
+#[test]
 fn verify_writes_stable_report_json_contract_by_default() {
     let tmp = TempDir::new().unwrap();
     let image = make_image(tmp.path(), "verify-report.bin", 8192);

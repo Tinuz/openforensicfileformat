@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-05-31T20:58:58Z",
+  "generated_at": "2026-05-31T21:03:19Z",
   "total_components": 22,
   "by_classification": {
     "core": [
@@ -137,53 +137,8 @@
       "maturity": "experimental"
     }
   ],
-  "gaps": [
-    {
-      "component": "offf-collect",
-      "type": "missing-docs"
-    },
-    {
-      "component": "offf-annotate",
-      "type": "missing-docs"
-    },
-    {
-      "component": "offf-keyword-worker",
-      "type": "missing-docs"
-    },
-    {
-      "component": "offf-yara-worker",
-      "type": "missing-docs"
-    },
-    {
-      "component": "offf-access-service",
-      "type": "missing-docs"
-    },
-    {
-      "component": "worker-runtime-state",
-      "type": "missing-tests"
-    },
-    {
-      "component": "python-sdk",
-      "type": "missing-docs"
-    },
-    {
-      "component": "go-sdk",
-      "type": "missing-docs"
-    },
-    {
-      "component": "tool-registry",
-      "type": "missing-tests"
-    },
-    {
-      "component": "tool-registry",
-      "type": "missing-docs"
-    },
-    {
-      "component": "demo-scripts",
-      "type": "missing-docs"
-    }
-  ],
-  "gap_count": 11,
+  "gaps": [],
+  "gap_count": 0,
   "release_1_0": {
     "scope_classifications": [
       "core",
@@ -213,29 +168,25 @@
       {
         "component": "go-sdk",
         "blockers": [
-          "maturity=experimental",
-          "missing-docs"
+          "maturity=experimental"
         ]
       },
       {
         "component": "offf-access-service",
         "blockers": [
-          "maturity=experimental",
-          "missing-docs"
+          "maturity=experimental"
         ]
       },
       {
         "component": "offf-annotate",
         "blockers": [
-          "maturity=experimental",
-          "missing-docs"
+          "maturity=experimental"
         ]
       },
       {
         "component": "offf-collect",
         "blockers": [
-          "maturity=experimental",
-          "missing-docs"
+          "maturity=experimental"
         ]
       },
       {
@@ -259,15 +210,13 @@
       {
         "component": "offf-keyword-worker",
         "blockers": [
-          "maturity=experimental",
-          "missing-docs"
+          "maturity=experimental"
         ]
       },
       {
         "component": "offf-yara-worker",
         "blockers": [
-          "maturity=experimental",
-          "missing-docs"
+          "maturity=experimental"
         ]
       },
       {
@@ -279,23 +228,19 @@
       {
         "component": "python-sdk",
         "blockers": [
-          "maturity=experimental",
-          "missing-docs"
+          "maturity=experimental"
         ]
       },
       {
         "component": "tool-registry",
         "blockers": [
-          "maturity=experimental",
-          "missing-tests",
-          "missing-docs"
+          "maturity=experimental"
         ]
       },
       {
         "component": "worker-runtime-state",
         "blockers": [
-          "maturity=experimental",
-          "missing-tests"
+          "maturity=experimental"
         ]
       }
     ],

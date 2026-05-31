@@ -1,6 +1,6 @@
 # OFFF Release Readiness Report
 
-Generated: 2026-05-31T20:58:58Z
+Generated: 2026-05-31T21:03:19Z
 
 **Total components:** 22
 
@@ -51,21 +51,9 @@ Generated: 2026-05-31T20:58:58Z
 | tool-registry | experimental | 2 maturity level(s) |
 | worker-runtime-state | experimental | 2 maturity level(s) |
 
-## Metadata gaps (11)
+## Metadata gaps
 
-| Component | Gap type |
-|---|---|
-| offf-collect | missing-docs |
-| offf-annotate | missing-docs |
-| offf-keyword-worker | missing-docs |
-| offf-yara-worker | missing-docs |
-| offf-access-service | missing-docs |
-| worker-runtime-state | missing-tests |
-| python-sdk | missing-docs |
-| go-sdk | missing-docs |
-| tool-registry | missing-tests |
-| tool-registry | missing-docs |
-| demo-scripts | missing-docs |
+None — all components have tests and docs listed.
 
 ## 1.0 readiness
 
@@ -90,19 +78,19 @@ Scope policy: core and reference components are in scope for the first 1.0 relea
 |---|---|
 | conformance-suite | maturity=reference |
 | extension-model | maturity=reference |
-| go-sdk | maturity=experimental, missing-docs |
-| offf-access-service | maturity=experimental, missing-docs |
-| offf-annotate | maturity=experimental, missing-docs |
-| offf-collect | maturity=experimental, missing-docs |
+| go-sdk | maturity=experimental |
+| offf-access-service | maturity=experimental |
+| offf-annotate | maturity=experimental |
+| offf-collect | maturity=experimental |
 | offf-export | maturity=reference |
 | offf-index | maturity=reference |
 | offf-jobs | maturity=reference |
-| offf-keyword-worker | maturity=experimental, missing-docs |
-| offf-yara-worker | maturity=experimental, missing-docs |
+| offf-keyword-worker | maturity=experimental |
+| offf-yara-worker | maturity=experimental |
 | packed-container | maturity=reference |
-| python-sdk | maturity=experimental, missing-docs |
-| tool-registry | maturity=experimental, missing-tests, missing-docs |
-| worker-runtime-state | maturity=experimental, missing-tests |
+| python-sdk | maturity=experimental |
+| tool-registry | maturity=experimental |
+| worker-runtime-state | maturity=experimental |
 
 ### Out of scope
 

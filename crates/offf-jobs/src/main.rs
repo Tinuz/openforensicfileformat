@@ -955,4 +955,40 @@ mod tests {
             JobRuntimeStatus::FailedTerminal
         );
     }
+
+    #[test]
+    fn run_writes_runtime_state_artifacts_for_failed_job_attempt() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let case_path = temp_dir.path();
+        let job = JobManifest {
+            job_id: "job-runtime-state-test".to_string(),
+            created_at: Utc::now(),
+            case_id: "urn:offf:case:test".to_string(),
+            task: "unsupported_task".to_string(),
+            scope: JobScope {
+                chunks: vec!["*".to_string()],
+            },
+            tool: ToolInfo {
+                name: "worker-test".to_string(),
+                version: "0.1.0".to_string(),
+            },
+            input_scope: None,
+            output_contract: None,
+            scope_ref: None,
+            include_sets: vec![],
+            policy_refs: vec![],
+            parameters: serde_json::json!({}),
+            parallelization: None,
+        };
+        let job_path = case_path.join("job.json");
+        fs::write(&job_path, serde_json::to_string_pretty(&job).unwrap()).unwrap();
+
+        let result = cmd_run(case_path, &job_path, "worker-test", 0, false);
+        assert!(result.is_err(), "unsupported task should fail");
+
+        let runtime_dir = case_path.join("jobs/runtime");
+        assert!(runtime_dir.join("job-runtime-state-test.state.json").exists());
+        assert!(runtime_dir.join("assignment_audit.jsonl").exists());
+        assert!(runtime_dir.join("worker_health.jsonl").exists());
+    }
 }
