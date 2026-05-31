@@ -1,6 +1,6 @@
 # OFFF Release Readiness Report
 
-Generated: 2026-05-31T21:03:19Z
+Generated: 2026-05-31T21:20:21Z
 
 **Total components:** 22
 
@@ -57,11 +57,11 @@ None — all components have tests and docs listed.
 
 ## 1.0 readiness
 
-Scope policy: core and reference components are in scope for the first 1.0 release; demo, experimental, and legacy components are out of scope unless promoted.
+Scope policy: only components with `release_1_0 = true` in `components.toml` are part of the first 1.0 stability promise. Other components remain available but are explicitly out of scope until promoted.
 
 **Ready:** 6
-**Blockers:** 15
-**Out of scope:** 1
+**Blockers:** 0
+**Out of scope:** 16
 
 ### Ready components
 
@@ -72,29 +72,24 @@ Scope policy: core and reference components are in scope for the first 1.0 relea
 - **offf-verify** (`forensic-grade-candidate`)
 - **schema-catalog** (`forensic-grade-candidate`)
 
-### Blockers
-
-| Component | Blockers |
-|---|---|
-| conformance-suite | maturity=reference |
-| extension-model | maturity=reference |
-| go-sdk | maturity=experimental |
-| offf-access-service | maturity=experimental |
-| offf-annotate | maturity=experimental |
-| offf-collect | maturity=experimental |
-| offf-export | maturity=reference |
-| offf-index | maturity=reference |
-| offf-jobs | maturity=reference |
-| offf-keyword-worker | maturity=experimental |
-| offf-yara-worker | maturity=experimental |
-| packed-container | maturity=reference |
-| python-sdk | maturity=experimental |
-| tool-registry | maturity=experimental |
-| worker-runtime-state | maturity=experimental |
-
 ### Out of scope
 
+- conformance-suite
 - demo-scripts
+- extension-model
+- go-sdk
+- offf-access-service
+- offf-annotate
+- offf-collect
+- offf-export
+- offf-index
+- offf-jobs
+- offf-keyword-worker
+- offf-yara-worker
+- packed-container
+- python-sdk
+- tool-registry
+- worker-runtime-state
 
 ## 1.0 backlog
 

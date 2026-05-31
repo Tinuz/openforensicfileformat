@@ -211,7 +211,7 @@ def main() -> int:
         else:
             not_forensic_ready.append({"component": name, "maturity": mat})
 
-        in_scope_1_0 = cls in RELEASE_1_0_IN_SCOPE_CLASSIFICATIONS
+        in_scope_1_0 = bool(meta.get("release_1_0", False))
         tests_missing = not tests_val or tests_val in ("–", "")
         docs_missing = not docs_val or docs_val in ("–", "")
 
@@ -328,7 +328,7 @@ def main() -> int:
         "",
         "## 1.0 readiness",
         "",
-        "Scope policy: core and reference components are in scope for the first 1.0 release; demo, experimental, and legacy components are out of scope unless promoted.",
+        "Scope policy: only components with `release_1_0 = true` in `components.toml` are part of the first 1.0 stability promise. Other components remain available but are explicitly out of scope until promoted.",
         "",
         f"**Ready:** {len(release_1_0_ready)}",
         f"**Blockers:** {len(release_1_0_blockers)}",

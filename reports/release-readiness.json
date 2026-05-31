@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-05-31T21:03:19Z",
+  "generated_at": "2026-05-31T21:20:21Z",
   "total_components": 22,
   "by_classification": {
     "core": [
@@ -152,104 +152,28 @@
       "offf-verify",
       "schema-catalog"
     ],
-    "blockers": [
-      {
-        "component": "conformance-suite",
-        "blockers": [
-          "maturity=reference"
-        ]
-      },
-      {
-        "component": "extension-model",
-        "blockers": [
-          "maturity=reference"
-        ]
-      },
-      {
-        "component": "go-sdk",
-        "blockers": [
-          "maturity=experimental"
-        ]
-      },
-      {
-        "component": "offf-access-service",
-        "blockers": [
-          "maturity=experimental"
-        ]
-      },
-      {
-        "component": "offf-annotate",
-        "blockers": [
-          "maturity=experimental"
-        ]
-      },
-      {
-        "component": "offf-collect",
-        "blockers": [
-          "maturity=experimental"
-        ]
-      },
-      {
-        "component": "offf-export",
-        "blockers": [
-          "maturity=reference"
-        ]
-      },
-      {
-        "component": "offf-index",
-        "blockers": [
-          "maturity=reference"
-        ]
-      },
-      {
-        "component": "offf-jobs",
-        "blockers": [
-          "maturity=reference"
-        ]
-      },
-      {
-        "component": "offf-keyword-worker",
-        "blockers": [
-          "maturity=experimental"
-        ]
-      },
-      {
-        "component": "offf-yara-worker",
-        "blockers": [
-          "maturity=experimental"
-        ]
-      },
-      {
-        "component": "packed-container",
-        "blockers": [
-          "maturity=reference"
-        ]
-      },
-      {
-        "component": "python-sdk",
-        "blockers": [
-          "maturity=experimental"
-        ]
-      },
-      {
-        "component": "tool-registry",
-        "blockers": [
-          "maturity=experimental"
-        ]
-      },
-      {
-        "component": "worker-runtime-state",
-        "blockers": [
-          "maturity=experimental"
-        ]
-      }
-    ],
+    "blockers": [],
     "out_of_scope": [
-      "demo-scripts"
+      "conformance-suite",
+      "demo-scripts",
+      "extension-model",
+      "go-sdk",
+      "offf-access-service",
+      "offf-annotate",
+      "offf-collect",
+      "offf-export",
+      "offf-index",
+      "offf-jobs",
+      "offf-keyword-worker",
+      "offf-yara-worker",
+      "packed-container",
+      "python-sdk",
+      "tool-registry",
+      "worker-runtime-state"
     ],
     "ready_count": 6,
-    "blocker_count": 15,
-    "out_of_scope_count": 1,
+    "blocker_count": 0,
+    "out_of_scope_count": 16,
     "backlog": [
       {
         "priority": "P0",

@@ -618,12 +618,19 @@ P2 - Later
   - Done: 2026-05-22
   - Progress: `offf-jobs run` now writes runtime state + replay id in `jobs/runtime/*.state.json`, assignment audit in `jobs/runtime/assignment_audit.jsonl`, and worker health in `jobs/runtime/worker_health.jsonl`
 
-- [ ] Phase I: integration tests voor file_collection acquisition mode (P1)
+- [x] Phase I: integration tests voor file_collection acquisition mode (P1) ✅ 2026-05-31
   - Added: 2026-05-29
-  - Tests toe te voegen in `tests/integration/src/lib.rs`:
-    - `file_collection_single_file` — collect één bestand, verify container met `offf-verify`, assert object_index bevat 1 rij, storage_ref klopt
-    - `file_collection_directory` — collect een directory met meerdere bestanden (inclusief subdirectories), assert object_index, object_edges en evidence store correct gevuld zijn
-    - `file_collection_tamper_detection` — collect bestanden, corrupteer een evidence object op disk, assert `offf-verify` faalt met FAIL op hash-mismatch
+  - Status: done
+  - Done: 2026-05-31
+  - Classification: reference
+  - Maturity: experimental
+  - Implemented in:
+      - tests/integration/src/lib.rs
+  - Tests:
+      - file_collection_single_file
+      - file_collection_directory
+      - file_collection_tamper_detection
+  - Progress: dedicated `offf-collect` integration coverage added for single-file collection, directory collection with nested paths, and tamper detection via evidence object corruption followed by failing `offf-verify`
   - Acceptatiecriteria:
     - alle drie tests in `cargo test --workspace` groen
     - bestaande tests blijven ongewijzigd slagen

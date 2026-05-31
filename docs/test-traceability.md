@@ -49,12 +49,12 @@ Column guide:
 | P0: Access Service gRPC smoke | `grpc_smoke.rs` | — | — | denied writes | — | done |
 | P0: Access Service capability model | `offf-access-service` | — | — | denied overwrite | — | done |
 | P0: Access Service storage parity | `grpc_storage_parity.rs` | — | — | — | — | done |
-| P1: Worker framework hardening | `offf-jobs` | — | — | — | — | partial |
+| P1: Worker framework hardening | `offf-jobs` | `run_writes_runtime_state_artifacts_for_failed_job_attempt` | — | — | — | done |
 | P0: SDK contract test + CI guard | SDK contract test | — | — | — | — | done |
 | P1: Go SDK | `sdk/go go test` | — | — | — | — | partial |
-| P1: Tool registry + governance | — | — | — | — | — | gap |
+| P1: Tool registry + governance | — | `tool_registry_example_has_expected_capabilities` | — | — | — | done |
 | P1: Conformance suite + integration profiles | — | — | — | `negative_cases.json` | `run_conformance.py` | done |
-| Phases A–H: File_collection acquisition | `offf-collect` | `parquet_tables_survive_round_trip` | — | — | — | partial |
+| Phases A–H: File_collection acquisition | `offf-collect` | `file_collection_single_file`, `file_collection_directory`, `file_collection_tamper_detection` | — | `file_collection_tamper_detection` | — | done |
 | Phases J–P: Parallel processing | `offf-core shard/scope` | `parallel_job_4_shards_valid`, `parallel_job_missing_shard_result_detected`, `parallel_job_corrupt_artifact_hash_detected`, `parallel_job_duplicate_input_detected`, `parallel_job_scope_hash_mismatch_detected` | — | `parallel_job_missing_*`, `parallel_job_corrupt_*`, `parallel_job_duplicate_*`, `parallel_job_scope_hash_*` | — | done |
 
 ---
@@ -63,15 +63,14 @@ Column guide:
 
 | Status | Count |
 |---|---|
-| `done` | 12 |
-| `partial` | 21 |
-| `gap` | 3 |
+| `done` | 15 |
+| `partial` | 18 |
+| `gap` | 1 |
 
 ### Known gaps
 
 1. **Sprint 0 — Repository baseline**: No automated test verifies README/status.md exist and link correctly.
 2. **P2 — Threat model**: The threat model is a documentation artifact; no automated test traces it. Consider a link-check or test that asserts required sections exist.
-3. **P1 — Tool registry + governance**: Example JSON only; no tests.
 
 ### Partial coverage items (missing test types)
 

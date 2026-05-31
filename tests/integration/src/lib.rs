@@ -20,11 +20,12 @@ use tempfile::TempDir;
 
 use offf_core::{
     chunk::{hex_sha256, read_chunk, verify_chunk, write_chunk},
+    evidence::evidence_object_path,
     hash::{deserialize_merkle_root, merkle_root, serialize_merkle_tree},
     lineage::ObjectLineageValidator,
     parquet_io::{
-        read_file_index, read_leaves, read_object_index, read_physical_to_chunk, write_leaves,
-        write_physical_to_chunk,
+        read_file_index, read_leaves, read_object_edges, read_object_index,
+        read_physical_to_chunk, write_leaves, write_physical_to_chunk,
     },
     provenance::ProvenanceWriter,
     storage::read_object_verified,
@@ -203,6 +204,46 @@ fn export_image(container: &Path, out: &Path) -> String {
     }
 
     format!("{:x}", source_hasher.finalize())
+}
+
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+}
+
+fn run_collect(inputs: &[PathBuf], output: &Path) -> std::process::ExitStatus {
+    let mut command = Command::new("cargo");
+    command
+        .current_dir(workspace_root())
+        .arg("run")
+        .arg("-p")
+        .arg("offf-collect")
+        .arg("--")
+        .arg("--input");
+
+    for input in inputs {
+        command.arg(input);
+    }
+
+    command
+        .arg("--output")
+        .arg(output)
+        .arg("--deterministic")
+        .status()
+        .unwrap()
+}
+
+fn run_verify(container: &Path) -> std::process::ExitStatus {
+    Command::new("cargo")
+        .current_dir(workspace_root())
+        .arg("run")
+        .arg("-p")
+        .arg("offf-verify")
+        .arg("--")
+        .arg(container)
+        .status()
+        .unwrap()
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -1545,4 +1586,68 @@ fn verify_writes_stable_report_json_contract_by_default() {
     assert!(first_check["status"].as_str().is_some());
     assert!(first_check["severity"].as_str().is_some());
     assert!(first_check["message"].as_str().is_some());
+}
+
+#[test]
+fn file_collection_single_file() {
+    let tmp = TempDir::new().unwrap();
+    let input = tmp.path().join("single.txt");
+    fs::write(&input, b"single file collection test").unwrap();
+    let container = tmp.path().join("single.offf");
+
+    assert!(run_collect(&[input.clone()], &container).success());
+    assert!(run_verify(&container).success());
+
+    let objects = read_object_index(&container.join("indexes/objects/object_index.parquet")).unwrap();
+    let edges = read_object_edges(&container.join("indexes/objects/object_edges.parquet")).unwrap();
+    let file_objects: Vec<_> = objects.iter().filter(|row| row.object_type == "file").collect();
+
+    assert_eq!(file_objects.len(), 1);
+    assert_eq!(edges.len(), 1);
+    assert_eq!(file_objects[0].size_bytes, Some(fs::metadata(&input).unwrap().len()));
+    assert!(file_objects[0].storage_ref.is_some());
+}
+
+#[test]
+fn file_collection_directory() {
+    let tmp = TempDir::new().unwrap();
+    let input_dir = tmp.path().join("tree");
+    fs::create_dir_all(input_dir.join("nested")).unwrap();
+    fs::write(input_dir.join("a.txt"), b"a").unwrap();
+    fs::write(input_dir.join("nested").join("b.txt"), b"bb").unwrap();
+    fs::write(input_dir.join("nested").join("c.txt"), b"ccc").unwrap();
+
+    let container = tmp.path().join("tree.offf");
+    assert!(run_collect(&[input_dir.clone()], &container).success());
+    assert!(run_verify(&container).success());
+
+    let objects = read_object_index(&container.join("indexes/objects/object_index.parquet")).unwrap();
+    let edges = read_object_edges(&container.join("indexes/objects/object_edges.parquet")).unwrap();
+    let file_objects: Vec<_> = objects.iter().filter(|row| row.object_type == "file").collect();
+
+    assert_eq!(file_objects.len(), 3);
+    assert_eq!(edges.len(), 3);
+
+    for object in file_objects {
+        let storage_ref = object.storage_ref.as_ref().expect("storage_ref expected");
+        assert!(evidence_object_path(&container, storage_ref).exists());
+    }
+}
+
+#[test]
+fn file_collection_tamper_detection() {
+    let tmp = TempDir::new().unwrap();
+    let input_dir = tmp.path().join("tamper");
+    fs::create_dir_all(&input_dir).unwrap();
+    fs::write(input_dir.join("sample.txt"), b"tamper me").unwrap();
+    let container = tmp.path().join("tamper.offf");
+
+    assert!(run_collect(&[input_dir], &container).success());
+
+    let objects = read_object_index(&container.join("indexes/objects/object_index.parquet")).unwrap();
+    let file_object = objects.iter().find(|row| row.object_type == "file").unwrap();
+    let storage_ref = file_object.storage_ref.as_ref().unwrap();
+    fs::write(evidence_object_path(&container, storage_ref), b"corrupted").unwrap();
+
+    assert!(!run_verify(&container).success());
 }

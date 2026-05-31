@@ -4,6 +4,19 @@ This matrix is the canonical per-component status record. For maturity level def
 `docs/maturity-model.md`. For Core/Reference/Demo classification see
 `docs/component-classification.md`. Machine-readable metadata is in `components.toml`.
 
+## 1.0 Scope
+
+The first OFFF 1.0 release is intentionally narrower than the full repository surface. The 1.0 stability promise currently covers only the components explicitly marked with `release_1_0 = true` in `components.toml`:
+
+- `offf-core`
+- Evidence container schema
+- Object lineage model
+- Schema catalog
+- `offf-convert` (raw/dd path)
+- `offf-verify`
+
+All other components remain available, but are reference or experimental surfaces outside the first 1.0 guarantee until they are explicitly promoted.
+
 ## Status Table
 
 | Component | Classification | Maturity | Status | Test evidence | Conformance profile | Known limitations | Last verified |
@@ -21,16 +34,16 @@ This matrix is the canonical per-component status record. For maturity level def
 | offf-index (partitions) | reference | reference | done | unit + integration | Indexer | GPT CRC/backup experimental; NTFS parser experimental | 2026-05-29 |
 | offf-index (objects) | reference | experimental | done | unit + integration | Indexer | Object index rebuild (--from-events) experimental | 2026-05-29 |
 | offf-jobs | reference | reference | done | unit + integration | Analysis Worker | Deterministic replay experimental; plan-shards/finalize-job reference | 2026-05-29 |
-| offf-collect | reference | experimental | done | integration (basic) | Acquisition (partial) | No dedicated file_collection integration tests yet (backlog Phase I) | 2026-05-29 |
+| offf-collect | reference | experimental | done | integration (single file, directory, tamper detection) | Acquisition (partial) | No dedicated E2E file_collection upload/verify cycle yet | 2026-05-31 |
 | offf-annotate | reference | experimental | done | unit (basic) | Extension | Minimal feature set; no integration tests | 2026-05-29 |
 | offf-keyword-worker | reference | experimental | done | unit + E2E | Analysis Worker | Cross-chunk boundary matching not conformance-tested | 2026-05-29 |
 | offf-yara-worker | reference | experimental | done | unit + E2E | Analysis Worker | Job output isolation hardening pending | 2026-05-29 |
 | offf-access-service | reference | experimental | done | unit + gRPC smoke + storage parity | Access Service | JWT/mTLS not independently security-reviewed; S3 smoke-tested only | 2026-05-29 |
 | Packed container (.offfpack) | reference | reference | done | unit | — | Not normative; verify requires unpacking; no E2E round-trip test | 2026-05-29 |
-| Worker runtime state | reference | experimental | done | none (missing gap) | — | Not part of OFFF Core; external schedulers may use own state store | 2026-05-29 |
+| Worker runtime state | reference | experimental | done | unit (`offf-jobs` runtime-state artifact test) | — | Not part of OFFF Core; external schedulers may use own state store | 2026-05-31 |
 | Python SDK | reference | experimental | done | SDK contract test | Reader, Analysis Worker | v0.2 API parity incomplete; LRU cache not battle-tested at scale | 2026-05-29 |
 | Go SDK | reference | experimental | done | go test ./... | Reader | v0.2 API parity incomplete; no lineage/extension API | 2026-05-29 |
-| Tool registry | reference | experimental | done | none (example only, missing gap) | Access Service | Example file only; no enforcement tooling | 2026-05-29 |
+| Tool registry | reference | experimental | done | integration (`tool_registry_example_has_expected_capabilities`) | Access Service | Example file only; no enforcement tooling | 2026-05-31 |
 | Demo scripts | demo | demo-only | done | smoke_check_demo.ps1 | — | Not production-grade; not conformance evidence | 2026-05-29 |
 | Parallel processing | reference | reference | done | integration (5 tests) | Analysis Worker | Shard planner and worker context are reference-level; finalize/verify in progress | 2026-05-29 |
 

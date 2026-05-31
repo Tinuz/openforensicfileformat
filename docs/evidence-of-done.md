@@ -597,12 +597,12 @@ For items without evidence, the gap is made explicit.
 
 **Test evidence:**
 - `cargo test -p offf-collect`
-- `cargo test -p offf-integration-tests`
+- `cargo test -p offf-integration-tests` — `file_collection_single_file`, `file_collection_directory`, `file_collection_tamper_detection`
 
 **Known limitations:**
-- No dedicated integration tests for file_collection mode (Phase I in backlog).
+- No dedicated E2E file_collection upload/verify cycle yet.
 
-**Conclusion:** Done criteria met at experimental level; Phase I integration tests are a known gap.
+**Conclusion:** Done criteria met at experimental level with dedicated file_collection integration coverage.
 
 ---
 
@@ -665,13 +665,32 @@ For items without evidence, the gap is made explicit.
 - `crates/offf-jobs/src/main.rs` — `run` subcommand with runtime state, replay id, assignment audit, worker health
 
 **Test evidence:**
-- `cargo test -p offf-jobs`
+- `cargo test -p offf-jobs` — includes `run_writes_runtime_state_artifacts_for_failed_job_attempt`
 
 **Known limitations:**
-- No dedicated unit/integration tests for runtime state lifecycle.
 - Worker health registry is reference only, not OFFF Core.
 
-**Conclusion:** Done criteria partially met; test evidence gap for runtime state noted.
+**Conclusion:** Done criteria met at experimental level; runtime state lifecycle now has direct artifact coverage.
+
+---
+
+## Tool registry + governance artifacts
+
+**Classification:** reference  
+**Maturity:** experimental  
+**Done:** 2026-05-22
+
+**Implemented in:**
+- `config/tool-registry.example.json`
+- `docs/tool-registry.md`
+
+**Test evidence:**
+- `cargo test -p offf-integration-tests` — `tool_registry_example_has_expected_capabilities`
+
+**Known limitations:**
+- Example registry only; no standalone enforcement tooling yet.
+
+**Conclusion:** Done criteria met at experimental level with integration coverage for the shipped example registry.
 
 ---
 
