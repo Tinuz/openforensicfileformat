@@ -1,0 +1,23 @@
+[package]
+name = "offf-migrate"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Migrate OFFF containers between format versions while preserving evidence hash invariants"
+
+[[bin]]
+name = "offf-migrate"
+path = "src/main.rs"
+
+[dependencies]
+offf-core = { path = "../offf-core" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+anyhow.workspace = true
+clap = { version = "4", features = ["derive"] }
+chrono.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
