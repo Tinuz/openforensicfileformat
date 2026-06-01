@@ -19,7 +19,7 @@ P0 - Direct oppakken
   - Implemented in:
       - README.md
       - docs/status.md
-  - Tests: manual verification
+  - Tests: python scripts/check_repository_baseline.py
   - Conformance: OFFF Core Conformant
   - Known limitations: none
   - Progress: root `README.md` toegevoegd met quickstart/build/examples + referenties; `docs/status.md` toegevoegd en gelinkt vanuit root README
@@ -437,10 +437,10 @@ P2 - Later
   - classification: core
   - maturity: reference
   - implemented-in: docs/threat-model.md
-  - tests: gap (documentation artifact — no automated test)
+  - tests: python scripts/check_threat_model.py
   - Done: 2026-05-29
   - Conformance: none
-  - Known limitations: gap: no automated test; manual review required
+  - Known limitations: documentation artifact; manual security review remains required
 
 - [x] Versioning policy and migration path (P2) ✅ 2026-05-29
   - Add `docs/versioning.md`

@@ -18,7 +18,7 @@ For items without evidence, the gap is made explicit.
 - `docs/status.md`
 
 **Test evidence:**
-- Manual verification: README exists, links to spec, schema catalog, status matrix.
+- `python scripts/check_repository_baseline.py`
 
 **Known limitations:**
 - Status matrix used outdated terminology at time of writing (now corrected).
@@ -559,7 +559,7 @@ For items without evidence, the gap is made explicit.
 - `docs/threat-model.md`
 
 **Test evidence:**
-- Document exists and covers all major threat vectors with mitigation and test references.
+- `python scripts/check_threat_model.py`
 
 **Known limitations:** External security review not yet done; threat model is internal only.
 

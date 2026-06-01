@@ -163,6 +163,12 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Check repository baseline docs gate
+        run: python scripts/check_repository_baseline.py
+
+      - name: Check threat model structure gate
+        run: python scripts/check_threat_model.py
+
       - name: Check test traceability matrix
         run: python scripts/check_test_traceability.py
 

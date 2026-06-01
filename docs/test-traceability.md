@@ -18,7 +18,7 @@ Column guide:
 
 | Requirement / Backlog item | Unit tests | Integration tests | E2E tests | Negative tests | Conformance | Status |
 |---|---|---|---|---|---|---|
-| Sprint 0: Repository baseline | — | — | — | — | — | gap |
+| Sprint 0: Repository baseline | `python scripts/check_repository_baseline.py` | — | — | — | — | done |
 | Sprint 1: Crash-safe convert | `offf-convert` | `small_image_round_trip` | `run_cli_e2e.py` | — | — | partial |
 | Sprint 2: Verify chunks before dedup | `chunk::verify_chunk` | `verify_detects_chunk_corruption` | — | `verify_detects_chunk_corruption` | `negative_cases.json` | done |
 | Sprint 3: Deterministic mode + sector-size | `offf-convert` | `small_image_round_trip`, `non_aligned_image_round_trip` | — | — | — | partial |
@@ -44,7 +44,7 @@ Column guide:
 | P2: Packed container | `offf-core packed` | — | — | — | — | partial |
 | P2: MinIO E2E smoke | — | — | `phase5_minio_smoke.py` | — | — | partial |
 | P2: E01 smoke | — | — | `phase7_e01_smoke.py` | — | — | partial |
-| P2: Threat model | — | — | — | — | — | gap |
+| P2: Threat model | `python scripts/check_threat_model.py` | — | — | — | — | done |
 | P2: Versioning policy | `manifest_v010_json_loadable_by_v020_reader` | `manifest_v020_round_trip_with_extensions` | — | — | — | partial |
 | P0: Access Service gRPC smoke | `grpc_smoke.rs` | — | — | denied writes | — | done |
 | P0: Access Service capability model | `offf-access-service` | — | — | denied overwrite | — | done |
@@ -63,14 +63,13 @@ Column guide:
 
 | Status | Count |
 |---|---|
-| `done` | 15 |
-| `partial` | 18 |
-| `gap` | 1 |
+| `done` | 18 |
+| `partial` | 20 |
+| `gap` | 0 |
 
 ### Known gaps
 
-1. **Sprint 0 — Repository baseline**: No automated test verifies README/status.md exist and link correctly.
-2. **P2 — Threat model**: The threat model is a documentation artifact; no automated test traces it. Consider a link-check or test that asserts required sections exist.
+None.
 
 ### Partial coverage items (missing test types)
 
@@ -91,9 +90,9 @@ Tests that run on every PR via `.github/workflows/offf-ci.yml`:
 | schema-validation | Validates all JSON schema files |
 | conformance-scaffold | `python tests/conformance/run_conformance.py` |
 | check-maturity-metadata | `python scripts/check_component_metadata.py` |
-| check-test-traceability | `python scripts/check_test_traceability.py` |
+| check-test-traceability | `python scripts/check_repository_baseline.py`, `python scripts/check_threat_model.py`, `python scripts/check_test_traceability.py` |
 | generate-release-readiness | `python scripts/generate_release_readiness.py` |
 
 ---
 
-*Last updated: 2026-05-29*
+*Last updated: 2026-06-01*
