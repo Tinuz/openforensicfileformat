@@ -1,13 +1,19 @@
 # SDK Overview
 
-## Doel
-De `sdk` map bevat client libraries voor OFFF use-cases zoals lezen, verifieren en schrijven van analysis/provenance data.
+## Purpose
+The `sdk` directory contains language SDKs for common OFFF workflows such as reading containers, verifying integrity, and writing analysis/provenance outputs.
 
-## Beschikbare SDK's
-- `python/`: Python SDK met minimale contract-surface en tests.
-- `go/`: Go SDK met minimale OFFF API-surface en smoke test.
+## Available SDKs
+- `python/`: Python SDK with minimal contract surface and tests.
+- `go/`: Go SDK with minimal OFFF API surface and smoke tests.
 
-## Richtlijnen
-- Houd API-pariteit met het afgesproken minimale OFFF SDK-profiel.
-- Voeg contract-tests toe bij uitbreiding van publieke API.
-- Beschrijf breaking changes expliciet per taal.
+## Typical Use Cases
+- Open a container and read manifest metadata.
+- Verify container and chunk integrity.
+- Map offsets to chunks.
+- Append analysis/provenance outputs via SDK APIs.
+
+## Guidelines
+- Keep parity with the agreed minimal OFFF SDK profile.
+- Add/update contract tests when extending public APIs.
+- Document breaking changes explicitly per language SDK.

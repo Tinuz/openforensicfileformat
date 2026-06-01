@@ -1,26 +1,26 @@
 # Integration Tests
 
-## Doel
-Deze crate valideert kern OFFF gedrag op componentniveau:
-- chunking en hash-consistentie
-- merkle consistentie
-- round-trip reconstructie
-- parquet index integriteit
-- detectie van corruptie
+## Purpose
+This crate validates core OFFF behavior at component level:
+- chunking and hash consistency
+- Merkle consistency
+- round-trip reconstruction
+- parquet index integrity
+- corruption detection
 
-## Start
+## Run
 ```bash
 cargo test -p offf-integration-tests -- --nocapture
 ```
 
-## Dekking
-Belangrijke scenario's:
-- kleine en niet-chunk-aligned images
-- compressie `none` en `zstd`
-- manifest en merkle verificatie
-- provenance-baseline
+## Coverage
+Key scenarios include:
+- small and non-chunk-aligned images
+- `none` and `zstd` compression
+- manifest and Merkle verification
+- provenance baseline checks
 
-## Uitbreiden
-1. Voeg eerst een reproduceerbare helperdataset toe.
-2. Voeg daarna minimaal een positief en negatief testpad toe.
-3. Houd assertions deterministisch.
+## Extending the Suite
+1. Add a reproducible helper dataset first.
+2. Add at least one positive and one negative test path.
+3. Keep assertions deterministic.

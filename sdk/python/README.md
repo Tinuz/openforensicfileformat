@@ -1,24 +1,24 @@
 # OFFF Python SDK
 
-## Doel
-De Python SDK biedt een eenvoudige API voor veelgebruikte OFFF-operaties:
-- container openen
-- manifest lezen
-- container en chunks verifieren
-- offsets mappen naar chunks
-- analysis resultaten schrijven
-- provenance events appenden
+## Purpose
+The Python SDK provides a practical API for common OFFF operations:
+- open containers
+- read manifests
+- verify containers and chunks
+- map offsets to chunks
+- write analysis outputs
+- append provenance events
 
-## Installatie
-1. Activeer een Python environment.
-2. Installeer afhankelijkheden via `pyproject.toml`.
-3. Installeer de package in editable mode:
+## Installation
+1. Activate a Python environment.
+2. Install dependencies via `pyproject.toml`.
+3. Install the package in editable mode:
 
 ```bash
 pip install -e sdk/python
 ```
 
-## Snelle start
+## Quick Start
 ```python
 from offf_sdk.api import open_container, verify_container
 
@@ -27,16 +27,23 @@ result = verify_container(c)
 print(result)
 ```
 
+## More Example Commands
+```bash
+cd sdk/python
+python -m unittest tests/test_api_contract.py -v
+python -m unittest tests/test_container_chunk_reader.py -v
+```
+
 ## Tests
-- Contract-test: `sdk/python/tests/test_api_contract.py`
-- Draai lokaal:
+- Contract test: `sdk/python/tests/test_api_contract.py`
+- Run locally:
 
 ```bash
 cd sdk/python
 python -m unittest tests/test_api_contract.py -v
 ```
 
-## Belangrijke modules
-- `offf_sdk/api.py`: publieke API-functies
-- `offf_sdk/container.py`: kernlogica voor lezen/verify/schrijven
-- `offf_sdk/schema_validation.py`: schema validatie
+## Key Modules
+- `offf_sdk/api.py`: public API functions
+- `offf_sdk/container.py`: core logic for read/verify/write operations
+- `offf_sdk/schema_validation.py`: schema validation helpers

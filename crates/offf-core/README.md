@@ -1,24 +1,24 @@
 # offf-core
 
-## Doel
-`offf-core` bevat gedeelde domeinlogica voor OFFF:
-- chunk read/write/verify
-- hash en merkle utilities
-- parquet IO helpers
-- provenance writer
-- storage abstractie voor local en S3
+## Purpose
+`offf-core` contains shared domain logic used across OFFF crates:
+- chunk read/write/verify primitives
+- hash and Merkle utilities
+- parquet I/O helpers
+- provenance append helpers
+- storage abstraction for local and S3
 - packed container helpers (`.offfpack` pack/list/unpack)
-- centrale types en fouten
+- central type definitions and error handling
 
-## Gebruik
-Deze crate wordt gebruikt door vrijwel alle andere crates en wordt normaal niet als los CLI-programma uitgevoerd.
+## Usage
+This crate is consumed by other crates and is typically not run as a standalone CLI.
 
-## Belangrijk
-- S3/MinIO toegang gebruikt endpoint uit `OFFF_S3_ENDPOINT`.
-- Bij custom endpoint wordt path-style addressing gebruikt voor compatibiliteit.
-- JSONL appends op S3 gebruiken optimistic concurrency retries.
+## Important Behavior
+- S3/MinIO access uses the endpoint configured by `OFFF_S3_ENDPOINT`.
+- Custom endpoints use path-style addressing for compatibility.
+- S3 JSONL appends use optimistic-concurrency retries.
 
-## Testen
+## Test Command
 ```bash
 cargo test -p offf-core -- --nocapture
 ```

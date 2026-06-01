@@ -1,21 +1,21 @@
 # Tools
 
-## Doel
-Deze map bevat tooling-assets die lokaal worden gebruikt voor ontwikkeling en smoke-validatie.
+## Purpose
+This directory contains tooling assets used locally for development and smoke validation.
 
-## Huidige inhoud
-- `ewfexport-docker/`: Docker build context voor EWF tooling image.
+## Current Contents
+- `ewfexport-docker/`: Docker build context for an EWF tooling image.
 
-## Gebruik
-1. Bouw tooling image:
+## Usage
+1. Build the tooling image:
 
 ```bash
 docker build -t offf/ewf-tools:latest tools/ewfexport-docker
 ```
 
-2. Gebruik image voor E01 exportflows in lokale smoke tests.
+2. Use this image for E01 export flows in local smoke tests.
 
-## Richtlijnen
-- Houd tool-images klein en reproduceerbaar.
-- Pin versies waar mogelijk.
-- Documenteer command line gedrag in de betreffende submap.
+## Guidelines
+- Keep tool images small and reproducible.
+- Pin versions where possible.
+- Document command-line behavior in the relevant subdirectory.

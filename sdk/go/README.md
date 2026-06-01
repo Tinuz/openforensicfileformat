@@ -1,24 +1,24 @@
 # OFFF Go SDK (Minimal Profile)
 
-## Doel
-De Go SDK implementeert het minimale OFFF API-profiel voor:
-- container openen
-- manifest lezen
-- container/chunk verificatie
-- offset naar chunk mapping
-- file-index lezen
-- analysis resultaten schrijven
-- provenance events appenden
+## Purpose
+The Go SDK implements the minimal OFFF API profile for:
+- opening containers
+- reading manifests
+- verifying containers/chunks
+- mapping offsets to chunks
+- reading file index rows
+- writing analysis outputs
+- appending provenance events
 
-## Vereisten
+## Requirements
 - Go 1.23+
 
-## Installatie
+## Installation
 ```bash
 go mod tidy
 ```
 
-## Snelle start
+## Quick Start
 ```go
 package main
 
@@ -46,4 +46,4 @@ func main() {
 go test ./...
 ```
 
-De smoke test gebruikt `tests/samples/4orensics.case2.offf` als aanwezig. Als deze sample lokaal ontbreekt, wordt de test overgeslagen.
+The smoke test uses `tests/samples/4orensics.case2.offf` when available. If that sample is missing locally, the test is skipped.

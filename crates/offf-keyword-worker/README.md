@@ -1,15 +1,15 @@
 # offf-keyword-worker
 
-## Doel
-Scant OFFF chunk-data op keyword patronen en schrijft hits naar `analysis/keyword_hits.parquet`.
+## Purpose
+Scans OFFF chunk data for keyword patterns and writes hits to `analysis/keyword_hits.parquet`.
 
 ## Input
-- case pad of `s3://` URI
-- job manifest met taak `keyword_scan`
-- scope op chunks
-- keywords en encodings
+- Case path or `s3://` URI.
+- Job manifest with task `keyword_scan`.
+- Chunk/input scope information.
+- Keywords and encoding configuration.
 
-## Voorbeeld
+## Example
 ```bash
 cargo run -p offf-keyword-worker -- \
   --case tests/samples/4orensics.case2.offf \
@@ -19,8 +19,8 @@ cargo run -p offf-keyword-worker -- \
 
 ## Output
 - `analysis/keyword_hits.parquet`
-- provenance append event voor voltooide scan
+- provenance append event for completed scan
 
 ## Notes
-- Ondersteunt local en S3/MinIO containers.
-- Provenance append op S3 is ontworpen voor concurrente workers.
+- Supports local and S3/MinIO containers.
+- S3 provenance append behavior is designed for concurrent workers.

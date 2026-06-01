@@ -1,22 +1,22 @@
 # offf-verify
 
-## Doel
-Valideert de integriteit en volledigheid van een OFFF container.
+## Purpose
+Validates the integrity and completeness of an OFFF container.
 
-## Checks
-- manifest parse/version
+## Core Checks
+- manifest parse/version validity
 - chunk stored/plaintext hashes
-- merkle root consistentie
-- source hash reconstructie
-- verplichte bestanden aanwezig
-- provenance bestand aanwezig en niet leeg
+- Merkle root consistency
+- source hash reconstruction
+- required files are present
+- provenance file is present and non-empty
 
-## Voorbeeld (local)
+## Example (local)
 ```bash
 cargo run -p offf-verify -- path/to/case.offf
 ```
 
-## Voorbeeld (S3/MinIO)
+## Example (S3/MinIO)
 ```bash
 OFFF_S3_ENDPOINT=http://localhost:9000 \
 AWS_ACCESS_KEY_ID=offfadmin \
@@ -25,6 +25,6 @@ AWS_REGION=us-east-1 \
 cargo run -p offf-verify -- s3://bucket/prefix
 ```
 
-## Exit codes
+## Exit Codes
 - `0`: VALID
 - `1`: INVALID

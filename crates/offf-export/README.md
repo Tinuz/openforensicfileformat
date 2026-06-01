@@ -1,9 +1,9 @@
 # offf-export
 
-## Doel
-Exporteert of reconstrueert data uit een OFFF container naar een gewenst outputformaat of raw stream.
+## Purpose
+Exports or reconstructs data from an OFFF container into a desired output format or raw stream.
 
-## Gebruik
+## Usage
 ```bash
 cargo run -p offf-export -- --help
 ```
@@ -28,8 +28,8 @@ cargo run -p offf-export -- list case.offfpack
 cargo run -p offf-export -- unpack case.offfpack --output restored.offf
 ```
 
-## Verwachting
-- Leest chunk map en chunk store.
-- Reconstructie volgt source-volgorde van chunks.
-- Integriteitscontroles horen onderdeel te zijn van exportflow of pre-check.
-- Packed container gebruikt een index + footer met checksum voor snelle validatie.
+## Behavior Summary
+- Reads chunk maps and chunk store data.
+- Reconstructs output in source chunk order.
+- Integrity verification should be part of the export workflow or a pre-check.
+- Packed containers use an index + checksum footer for fast validation.

@@ -1,22 +1,32 @@
 # OFFF Schema Catalog
 
-## Doel
-Deze map bevat JSON Schema definities voor OFFF artefacten, inclusief manifesten, index-rows, provenance en job-objecten.
+## Purpose
+This directory contains JSON Schema definitions for OFFF artifacts, including manifests, index rows, provenance events, and job-related objects.
 
-## Inhoud
-Voorbeelden van schema's in deze map:
+## Example Files
 - `offf-manifest-0.1.0.schema.json`
 - `offf-acquisition-0.1.0.schema.json`
 - `offf-file-index-row-0.1.0.schema.json`
 - `offf-provenance-event-0.1.0.schema.json`
 - `offf-schema-catalog-0.1.0.json`
 
-## Gebruik
-1. Kies het schema dat hoort bij het objecttype en de versie.
-2. Valideer producer-output tijdens tests.
-3. Laat consumers falen op schemafouten met duidelijke foutmelding.
+## How to Use
+1. Select the schema that matches object type and version.
+2. Validate producer output during tests.
+3. Fail consumers on schema violations with explicit errors.
 
-## Onderhoudsregels
-- Voeg bij een breaking change een nieuwe versiesuffix toe.
-- Houd oudere schema's read-only voor reproduceerbaarheid.
-- Werk catalog-bestand bij als er schema's bijkomen.
+## Maintenance Rules
+- Add a new version suffix for breaking changes.
+- Keep older schemas read-only for reproducibility.
+- Update schema catalog files whenever new schemas are added.
+
+## Quick Validation Example
+```bash
+python - << 'PY'
+import json
+from pathlib import Path
+for p in sorted(Path('docs/schema').glob('*.json')):
+	json.loads(p.read_text(encoding='utf-8'))
+	print('OK', p)
+PY
+```

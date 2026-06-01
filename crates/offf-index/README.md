@@ -1,12 +1,12 @@
 # offf-index
 
-## Doel
-Bouwt indexen op OFFF data, zoals filesystem index en gerelateerde lookup artefacten.
+## Purpose
+Builds indexes on OFFF data, including partition, filesystem, and object-graph related lookup artifacts.
 
-## Resultaat
-Index output wordt geschreven onder `indexes/` in de container, inclusief file index parquet bestanden.
+## Output
+Index artifacts are written under `indexes/` in the container, including parquet index tables.
 
-## Voorbeeld
+## Example Commands
 ```bash
 cargo run -p offf-index -- --help
 
@@ -17,7 +17,7 @@ cargo run -p offf-index -- objects case.offf --from-filesystem
 cargo run -p offf-index -- full case.offf --hash-content deferred
 ```
 
-## Richtlijnen
-- Houd index output deterministisch waar mogelijk.
-- Schrijf provenance events voor index build acties.
-- Controleer output met conformance en verify flows.
+## Guidelines
+- Keep index output deterministic where possible.
+- Emit provenance events for index build actions.
+- Validate outputs with conformance and verify flows.

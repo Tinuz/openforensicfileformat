@@ -1,13 +1,13 @@
 # offf-convert
 
-## Doel
-Converteert brondata naar een OFFF container, inclusief chunk store, hashes, maps, manifest, acquisition en provenance.
+## Purpose
+Converts source evidence into an OFFF container, including chunk store, hashes, maps, manifest, acquisition metadata, and provenance.
 
-## Ondersteunde input
+## Supported Input
 - raw/dd image
-- E01 (met export naar raw stream)
+- E01 (via exported raw stream)
 
-## Voorbeeld
+## Example (raw/dd)
 ```bash
 cargo run -p offf-convert -- \
   --input evidence.dd \
@@ -16,7 +16,7 @@ cargo run -p offf-convert -- \
   --compression zstd
 ```
 
-## E01 voorbeeld
+## Example (E01)
 ```bash
 cargo run -p offf-convert -- \
   --input sample.E01 \
@@ -25,6 +25,11 @@ cargo run -p offf-convert -- \
   --ewf-export-tool ewfexport
 ```
 
+## Additional Useful Flags
+```bash
+cargo run -p offf-convert -- --help
+```
+
 ## Notes
-- Op Windows ondersteunt de E01-flow dockerized `ewfexport` fallback.
-- `acquisition.json` bevat bij E01 ook `source_container` en `evidence_stream` metadata.
+- On Windows, the E01 pipeline supports a dockerized `ewfexport` fallback.
+- For E01 input, `acquisition.json` includes `source_container` and `evidence_stream` metadata.

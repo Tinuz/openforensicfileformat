@@ -1,18 +1,22 @@
 # Documentation
 
-## Doel
-Deze map bevat formele en operationele documentatie voor het OFFF ecosysteem.
+## Purpose
+This directory contains formal and operational documentation for the OFFF ecosystem.
 
-## Structuur
-- `schema/`: JSON Schema definities voor OFFF objecten en events.
+## Structure
+- `schema/`: JSON Schema definitions for OFFF objects and events.
+- Additional governance, maturity, profile, and operational documents used by CI and release readiness tooling.
 
-## Werkwijze
-1. Werk schema of documentatie altijd versiegebonden bij.
-2. Valideer JSON schema bestanden lokaal en in CI.
-3. Koppel wijzigingen aan concrete implementaties in crates of SDK's.
+## Workflow
+1. Update schema/doc content with explicit version context.
+2. Validate schema files locally and in CI.
+3. Link documentation changes to concrete crate/SDK behavior.
+4. Add or update tests when behavior changes.
+5. Confirm backward compatibility expectations.
 
-## Aanbevolen workflow
-1. Pas schema aan.
-2. Werk producer/consumer code bij.
-3. Voeg of update tests.
-4. Verifieer backward compatibility.
+## Useful Commands
+```bash
+python scripts/check_component_metadata.py
+python scripts/check_test_traceability.py
+python scripts/generate_release_readiness.py
+```

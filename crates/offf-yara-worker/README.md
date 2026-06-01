@@ -1,14 +1,14 @@
 # offf-yara-worker
 
-## Doel
-Scant OFFF chunks met YARA regels en schrijft hits naar `analysis/yara_hits.parquet`.
+## Purpose
+Scans OFFF chunks with YARA rules and writes hits to `analysis/yara_hits.parquet`.
 
 ## Input
-- case pad of `s3://` URI
-- job manifest met taak `yara_scan`
-- `rules_inline` en `rules_hash`
+- Case path or `s3://` URI.
+- Job manifest with task `yara_scan`.
+- `rules_inline` and `rules_hash` payloads.
 
-## Voorbeeld
+## Example
 ```bash
 cargo run -p offf-yara-worker -- \
   --case tests/samples/4orensics.case2.offf \
@@ -18,8 +18,8 @@ cargo run -p offf-yara-worker -- \
 
 ## Output
 - `analysis/yara_hits.parquet`
-- provenance event met scan metadata
+- provenance event with scan metadata
 
 ## Notes
-- Gebruikt `yara-x` compiler/scanner.
-- Werkt op local en S3/MinIO cases.
+- Uses the `yara-x` compiler/scanner.
+- Works with local and S3/MinIO cases.

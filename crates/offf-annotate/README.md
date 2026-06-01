@@ -1,19 +1,24 @@
 # offf-annotate
 
-## Doel
-Biedt annotatiefunctionaliteit op OFFF containers, inclusief append-operaties op analysis/provenance lagen.
+## Purpose
+Provides annotation workflows for OFFF containers, including append operations on analysis/provenance layers.
 
-## Gebruik
+## Usage
 ```bash
 cargo run -p offf-annotate -- --help
 ```
 
-## Typische acties
-- annotatie toevoegen
-- annotatie updaten
-- annotatie queryen (afhankelijk van subcommands)
+## Typical Actions
+- Add annotations.
+- Update annotations.
+- Query annotations (depending on available subcommands).
 
-## Richtlijnen
-- Houd evidence layer immutable.
-- Schrijf mutaties alleen naar toegestane append layers.
-- Voeg provenance records toe voor auditbaarheid.
+## Example
+```bash
+cargo run -p offf-annotate -- annotate --case tests/samples/4orensics.case2.offf --help
+```
+
+## Guidelines
+- Keep the evidence layer immutable.
+- Write mutations only to allowed append layers.
+- Emit provenance records for auditability.

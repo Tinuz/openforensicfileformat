@@ -1,19 +1,25 @@
 # Test Samples
 
-## Doel
-Deze map bevat voorbeelddata voor OFFF tooling en tests.
+## Purpose
+This directory contains sample data used by OFFF tooling and test suites.
 
-## Inhoud
-- voorbeeld OFFF container(s)
-- jobmanifesten voor keyword en yara workers
-- YARA rule bestanden
-- gecomprimeerde of uitgepakte referentiecases
+## Contents
+- sample OFFF container(s)
+- job manifests for keyword and YARA workers
+- YARA rule files
+- compressed or unpacked reference cases
 
-## Gebruik
-- Gebruik samples in smoke en conformance tests voor reproduceerbaarheid.
-- Wijzig samplebestanden niet zonder impactanalyse op bestaande tests.
+## Usage
+- Use samples in smoke and conformance tests for reproducibility.
+- Do not modify sample files without impact analysis on existing tests.
 
-## Richtlijnen
-- Gebruik geen gevoelige data.
-- Houd bestandsnamen stabiel, zodat CI scripts niet breken.
-- Voeg bij nieuwe samples een korte beschrijving toe in deze README.
+## Example Commands
+```bash
+python tests/conformance/run_conformance.py
+cargo test -p offf-integration-tests -- --nocapture
+```
+
+## Guidelines
+- Do not include sensitive data.
+- Keep file names stable so CI scripts do not break.
+- Add a short description here when introducing new sample files.

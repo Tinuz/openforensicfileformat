@@ -1,27 +1,27 @@
 # OFFF Rust Crates
 
-## Doel
-Deze map bevat alle Rust crates voor OFFF conversie, verificatie, indexing, services en workers.
+## Purpose
+This directory contains all Rust crates that implement OFFF conversion, verification, indexing, access services, and workers.
 
-## Overzicht
-- `offf-core`: gedeelde core logica en types
-- `offf-convert`: raw/E01 naar OFFF converter
-- `offf-verify`: integriteitsverificatie
-- `offf-index`: index-opbouw
-- `offf-export`: reconstructie/export
-- `offf-jobs`: job orchestration
-- `offf-access-service`: REST/gRPC access service
-- `offf-keyword-worker`: keyword scan worker
-- `offf-yara-worker`: YARA scan worker
-- `offf-annotate`: annotation tooling
+## Main Crates
+- `offf-core`: Shared domain types, chunk/hash logic, storage primitives, parquet helpers.
+- `offf-convert`: Raw/E01 to OFFF conversion.
+- `offf-verify`: Container integrity and consistency verification.
+- `offf-index`: Partition/filesystem/object indexing.
+- `offf-export`: Reconstruction and packed container export/import helpers.
+- `offf-jobs`: Job orchestration and runtime state artifacts.
+- `offf-access-service`: REST/gRPC access surface with policy/capability checks.
+- `offf-keyword-worker`: Keyword scanning worker.
+- `offf-yara-worker`: YARA scanning worker.
+- `offf-annotate`: Annotation and append-only annotation workflows.
 
-## Build en test
+## Build and Test
 ```bash
 cargo check --workspace
 cargo test --workspace -- --nocapture
 ```
 
-## Ontwikkelrichtlijnen
-- Houd publieke types in `offf-core` stabiel.
-- Gebruik end-to-end smoke tests voor omgeving-afhankelijke wijzigingen.
-- Voeg provenance events toe bij write-operaties.
+## Development Guidelines
+- Keep public types in `offf-core` stable and backward-aware.
+- Use smoke/E2E coverage for environment-dependent changes.
+- Emit provenance events for write operations where applicable.

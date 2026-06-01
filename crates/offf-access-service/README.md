@@ -1,36 +1,33 @@
 # offf-access-service
 
-## Doel
-Biedt REST en gRPC toegang tot OFFF cases voor lezen en gecontroleerde writes (analysis/provenance), inclusief capability- en policy-checks.
+## Purpose
+Provides REST and gRPC access to OFFF cases for read operations and controlled append-only writes (analysis/provenance), with capability and policy enforcement.
 
-## Functionaliteit
-- manifest/chunk/file retrieval
-- list endpoints voor files/artifacts
-- append analysis resultaten
-- append provenance events
-- authz per role en write-layer
-- opslag-pariteit voor local filesystem en `s3://` case paths (MinIO/Ceph/S3)
+## Features
+- Manifest/chunk/file retrieval endpoints.
+- List/query endpoints for files and artifacts.
+- Append analysis result writes.
+- Append provenance event writes.
+- Authorization by role and write layer.
+- Local filesystem and `s3://` parity support (MinIO/Ceph/S3).
 
-## Start (voorbeeld)
+## Quick Start
 ```bash
 cargo run -p offf-access-service -- --help
 ```
 
-## Testen
+## Common Test Commands
 ```bash
 cargo test -p offf-access-service --test grpc_smoke -- --nocapture
-```
-
-## Configuratie
-- Koppel tool registry configuratie uit `config/` voor governance enforcement.
-- Gebruik sample OFFF containers uit `tests/samples` voor snelle smoke runs.
-- Voor object storage: zet `OFFF_CASES_ROOT` op een `s3://bucket/prefix` root of geef `case_id` als volledige `s3://` URI.
-- Voor MinIO/Ceph endpoint compatibiliteit: configureer `OFFF_S3_ENDPOINT`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` en optioneel `AWS_REGION`.
-
-## Parity tests
-```bash
 cargo test -p offf-access-service --tests -- --nocapture
 ```
 
-`tests/grpc_storage_parity.rs` draait parity-checks voor local vs `s3://` case paths.
-De S3 parity test wordt automatisch overgeslagen als `OFFF_S3_ENDPOINT` en `OFFF_S3_TEST_BUCKET` niet gezet zijn.
+## Configuration Notes
+- Use tool-registry configuration from `config/` for governance enforcement.
+- Use sample OFFF containers from `tests/samples` for smoke runs.
+- For object storage, set `OFFF_CASES_ROOT` to an `s3://bucket/prefix` root or pass `case_id` as a full `s3://` URI.
+- For MinIO/Ceph endpoint compatibility, configure `OFFF_S3_ENDPOINT`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and optionally `AWS_REGION`.
+
+## Storage Parity
+`tests/grpc_storage_parity.rs` validates local vs `s3://` case path parity.
+S3 parity tests are auto-skipped when `OFFF_S3_ENDPOINT` and `OFFF_S3_TEST_BUCKET` are not set.
