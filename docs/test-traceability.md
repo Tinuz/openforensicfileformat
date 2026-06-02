@@ -24,7 +24,7 @@ Column guide:
 | Sprint 3: Deterministic mode + sector-size | `offf-convert` | `small_image_round_trip`, `non_aligned_image_round_trip` | — | — | — | partial |
 | Sprint 4: Merkle proofs + tree validation | `hash::merkle_proof_*` | `merkle_root_matches_manifest` | — | — | `negative_cases.json` | done |
 | Sprint 5: Verifier profiles + leaves | `offf-verify` | `verify_detects_chunk_corruption` | `run_cli_e2e.py` | `verify_detects_chunk_corruption` | `run_conformance.py` | done |
-| Sprint 6: Append-only analysis model | `offf-keyword-worker`, `offf-yara-worker` | — | `run_cli_e2e.py` | — | — | partial |
+| Sprint 6: Append-only analysis model | `offf-workers workspace` | — | `phase5_minio_smoke.py` (requires `../offf-workers`) | — | — | partial |
 | Sprint 7: Access Service auth + denied audit | `offf-access-service` | — | — | `grpc_smoke.rs` denied writes | — | partial |
 | Sprint 8: CI + CLI E2E + negative conformance | — | — | `run_cli_e2e.py` | `negative_cases.json` | `run_conformance.py` | done |
 | Sprint 9: Object lineage model + schemas | `offf-core lineage` | `lineage_valid_graph_passes`, `lineage_cycle_in_object_graph_fails`, `lineage_missing_child_object_fails` | — | `lineage_cycle_*`, `lineage_missing_*` | — | done |
@@ -34,7 +34,7 @@ Column guide:
 | Sprint 13: Manifest extensions v0.2 | `offf-core` | `manifest_v020_round_trip_with_extensions`, `manifest_v010_json_loadable_by_v020_reader` | — | — | — | done |
 | Sprint 14: Demo proofability CLI | — | — | `smoke_check_demo.ps1` | — | — | partial |
 | Sprint 15: Generic extension types | `offf-core extensions` | — | — | — | — | partial |
-| Sprint 16: Scope-aware jobs and workers | `offf-keyword-worker`, `offf-yara-worker` | — | — | — | — | partial |
+| Sprint 16: Scope-aware jobs and workers | `offf-workers workspace` | — | — | — | — | partial |
 | Sprint 17: Legacy compatibility profile | `offf-verify` | — | — | — | — | partial |
 | Sprint 18: Object graph read/query APIs | SDK contract test | — | — | — | — | partial |
 | Sprint 19: Object-per-event append model | `offf-core extensions` | — | — | — | — | partial |

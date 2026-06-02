@@ -1,6 +1,6 @@
 # OFFF Release Readiness Report
 
-Generated: 2026-05-31T21:20:21Z
+Generated: 2026-06-02T17:13:13Z
 
 **Total components:** 22
 
@@ -155,10 +155,10 @@ The backlog below is ordered by delivery priority, not by component size.
 **Minimal files:**
 
 - crates/offf-access-service/src/main.rs
-- crates/offf-annotate/src/main.rs
 - crates/offf-collect/src/main.rs
-- crates/offf-keyword-worker/src/main.rs
-- crates/offf-yara-worker/src/main.rs
+- https://github.com/Tinuz/offf-workers/tree/main/crates/offf-annotate/src/main.rs
+- https://github.com/Tinuz/offf-workers/tree/main/crates/offf-keyword-worker/src/main.rs
+- https://github.com/Tinuz/offf-workers/tree/main/crates/offf-yara-worker/src/main.rs
 - docs/object-content-ref.md
 - docs/filesystem-to-object-graph.md
 - docs/conformance-profiles.md
@@ -166,10 +166,8 @@ The backlog below is ordered by delivery priority, not by component size.
 **Minimal tests:**
 
 - cargo test -p offf-access-service
-- cargo test -p offf-annotate
 - cargo test -p offf-collect
-- cargo test -p offf-keyword-worker
-- cargo test -p offf-yara-worker
+- cargo test --workspace (offf-workers)
 - python tests/e2e/run_cli_e2e.py
 
 **Acceptance:** Experimental surfaces are either promoted with evidence or clearly fenced from the 1.0 guarantee.

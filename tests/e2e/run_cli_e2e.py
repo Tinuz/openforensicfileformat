@@ -42,9 +42,6 @@ def run_e2e() -> int:
         tmp_dir = Path(tmp)
         raw_path = tmp_dir / "e2e.raw"
         case_path = tmp_dir / "e2e.offf"
-        keyword_job = tmp_dir / "keyword_job.json"
-        yara_job = tmp_dir / "yara_job.json"
-
         raw_path.write_bytes((bytes(range(256)) * 8192)[:1_048_576])
 
         run(
@@ -77,87 +74,14 @@ def run_e2e() -> int:
             "conformance",
         ])
 
-        write_json(
-            keyword_job,
-            {
-                "job_id": "job-e2e-keyword",
-                "created_at": "2026-05-24T00:00:00Z",
-                "case_id": "urn:offf:case:e2e",
-                "task": "keyword_scan",
-                "scope": {"chunks": ["*"]},
-                "tool": {"name": "offf-e2e", "version": "0.1.0"},
-                "parameters": {
-                    "keywords": ["ABC", "XYZ"],
-                    "encoding": ["utf-8"],
-                },
-            },
-        )
-        write_json(
-            yara_job,
-            {
-                "job_id": "job-e2e-yara",
-                "created_at": "2026-05-24T00:00:00Z",
-                "case_id": "urn:offf:case:e2e",
-                "task": "yara_scan",
-                "scope": {"chunks": ["*"]},
-                "tool": {"name": "offf-e2e", "version": "0.1.0"},
-                "parameters": {
-                    "rules_hash": "sha256:e2e",
-                    "rules_inline": "rule always_true { condition: true }",
-                },
-            },
-        )
-
-        run(
-            [
-                "cargo",
-                "run",
-                "-p",
-                "offf-keyword-worker",
-                "--",
-                "--case",
-                str(case_path),
-                "--job",
-                str(keyword_job),
-                "--worker-id",
-                "e2e-keyword",
-            ]
-        )
-        run(
-            [
-                "cargo",
-                "run",
-                "-p",
-                "offf-yara-worker",
-                "--",
-                "--case",
-                str(case_path),
-                "--job",
-                str(yara_job),
-                "--worker-id",
-                "e2e-yara",
-            ]
-        )
-
+        # Core-repo E2E scope intentionally excludes worker execution.
+        check_path(case_path / "manifest.json", checks, "manifest_present")
+        check_path(case_path / "acquisition.json", checks, "acquisition_present")
+        check_path(case_path / "hashes" / "merkle_tree.bin", checks, "merkle_tree_present")
         check_path(
-            case_path / "analysis" / "jobs" / "job-e2e-keyword" / "keyword_hits.parquet",
+            case_path / "maps" / "physical_to_chunk.parquet",
             checks,
-            "keyword_hits_job_scoped_present",
-        )
-        check_path(
-            case_path / "analysis" / "jobs" / "job-e2e-keyword" / "result_manifest.json",
-            checks,
-            "keyword_result_manifest_present",
-        )
-        check_path(
-            case_path / "analysis" / "jobs" / "job-e2e-yara" / "yara_hits.parquet",
-            checks,
-            "yara_hits_job_scoped_present",
-        )
-        check_path(
-            case_path / "analysis" / "jobs" / "job-e2e-yara" / "result_manifest.json",
-            checks,
-            "yara_result_manifest_present",
+            "physical_to_chunk_map_present",
         )
 
     status = "PASS" if all(c["status"] == "PASS" for c in checks) else "FAIL"

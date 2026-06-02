@@ -34,7 +34,7 @@ without replacing existing platforms.
 | Verification (`offf-verify`) | `forensic-grade-candidate` | 4 conformance profiles supported |
 | Schema catalog | `forensic-grade-candidate` | v0.1.0 + v0.2.0 |
 | Indexing, jobs, export | `reference` | Suitable for adoption; not independently reviewed |
-| Workers (keyword, YARA) | `experimental` | Working; not conformance-complete |
+| Workers (keyword, YARA, annotate) | `experimental` | Moved to separate repository: `Tinuz/offf-workers` |
 | Access service | `experimental` | JWT mode implemented; no independent security review |
 | SDKs (Python, Go) | `experimental` | API parity incomplete |
 | Demo scripts | `demo-only` | Synthetic data only; not conformance evidence |
@@ -115,7 +115,7 @@ See `docs/pilot-template.md` and `docs/risk-assessment-template.md` for pilot ma
 
 ## Architecture Overview
 - Evidence layer: `manifest.json`, `acquisition.json`, `chunks/`, `hashes/`, `maps/`
-- Processing layer: indexing, jobs, workers
+- Processing layer: indexing and jobs (workers are maintained in a separate repository)
 - Access layer: REST/gRPC access service with capability controls
 - SDK layer: Python and Go SDKs
 - Conformance layer: schema checks and profile-based tests
@@ -165,16 +165,21 @@ cargo run -p offf-export -- export sample.offf --output reconstructed.dd
 cargo run -p offf-index -- partitions sample.offf
 ```
 
-- Create and run keyword job:
+- Create a keyword job manifest:
 ```bash
 cargo run -p offf-jobs -- create-keyword --case sample.offf --keywords password,secret
-cargo run -p offf-jobs -- run --case sample.offf --job sample.offf/jobs/<job_id>.json
+```
+
+- Run workers from the dedicated worker repository:
+```bash
+cd ../offf-workers
+cargo run -p offf-keyword-worker -- --case ../offf/sample.offf --job ../offf/sample.offf/jobs/<job_id>.json --worker-id worker-1
 ```
 
 ---
 
 ## Project Structure
-- `crates/`: Rust crates (`offf-core`, `offf-convert`, `offf-verify`, workers, services)
+- `crates/`: Rust crates (`offf-core`, `offf-convert`, `offf-verify`, indexing, jobs, services)
 - `docs/`: documentation, schemas, and governance docs
 - `sdk/`: Python and Go SDKs
 - `tests/`: integration, conformance, and sample datasets
@@ -233,3 +238,11 @@ The demo environment (Docker workers, Tika, Elasticsearch, unsupervised classifi
 **[https://github.com/Tinuz/offf-demo](https://github.com/Tinuz/offf-demo)**
 
 Demo components are classified `demo-only` and must not be cited as evidence of OFFF conformance or forensic validity.
+
+## Worker repository
+
+Worker implementations are maintained in a dedicated repository:
+
+**[https://github.com/Tinuz/offf-workers](https://github.com/Tinuz/offf-workers)**
+
+This keeps core OFFF container functionality separate from worker implementation lifecycles.

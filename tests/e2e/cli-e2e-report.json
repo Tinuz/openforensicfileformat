@@ -1,26 +1,26 @@
 {
-  "generated_at": "2026-05-24T20:00:22.885985+00:00",
+  "generated_at": "2026-06-02T17:12:51.268615+00:00",
   "status": "PASS",
   "checks": [
     {
-      "name": "keyword_hits_job_scoped_present",
+      "name": "manifest_present",
       "status": "PASS",
-      "detail": "C:\\Users\\marti\\AppData\\Local\\Temp\\offf-e2e-5x8qztcv\\e2e.offf\\analysis\\jobs\\job-e2e-keyword\\keyword_hits.parquet"
+      "detail": "C:\\Users\\marti\\AppData\\Local\\Temp\\offf-e2e-kd3webu4\\e2e.offf\\manifest.json"
     },
     {
-      "name": "keyword_result_manifest_present",
+      "name": "acquisition_present",
       "status": "PASS",
-      "detail": "C:\\Users\\marti\\AppData\\Local\\Temp\\offf-e2e-5x8qztcv\\e2e.offf\\analysis\\jobs\\job-e2e-keyword\\result_manifest.json"
+      "detail": "C:\\Users\\marti\\AppData\\Local\\Temp\\offf-e2e-kd3webu4\\e2e.offf\\acquisition.json"
     },
     {
-      "name": "yara_hits_job_scoped_present",
+      "name": "merkle_tree_present",
       "status": "PASS",
-      "detail": "C:\\Users\\marti\\AppData\\Local\\Temp\\offf-e2e-5x8qztcv\\e2e.offf\\analysis\\jobs\\job-e2e-yara\\yara_hits.parquet"
+      "detail": "C:\\Users\\marti\\AppData\\Local\\Temp\\offf-e2e-kd3webu4\\e2e.offf\\hashes\\merkle_tree.bin"
     },
     {
-      "name": "yara_result_manifest_present",
+      "name": "physical_to_chunk_map_present",
       "status": "PASS",
-      "detail": "C:\\Users\\marti\\AppData\\Local\\Temp\\offf-e2e-5x8qztcv\\e2e.offf\\analysis\\jobs\\job-e2e-yara\\result_manifest.json"
+      "detail": "C:\\Users\\marti\\AppData\\Local\\Temp\\offf-e2e-kd3webu4\\e2e.offf\\maps\\physical_to_chunk.parquet"
     }
   ]
 }

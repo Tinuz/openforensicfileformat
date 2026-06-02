@@ -37,9 +37,9 @@ The machine-readable record is in `components.toml` at the repository root.
 | **offf-index** | `reference` | `reference` | `crates/offf-index` |
 | **offf-jobs** | `reference` | `reference` | `crates/offf-jobs` |
 | **offf-collect** | `reference` | `experimental` | `crates/offf-collect` |
-| **offf-annotate** | `reference` | `experimental` | `crates/offf-annotate` |
-| **offf-keyword-worker** | `reference` | `experimental` | `crates/offf-keyword-worker` |
-| **offf-yara-worker** | `reference` | `experimental` | `crates/offf-yara-worker` |
+| **offf-annotate** | `reference` | `experimental` | `https://github.com/Tinuz/offf-workers/tree/main/crates/offf-annotate` |
+| **offf-keyword-worker** | `reference` | `experimental` | `https://github.com/Tinuz/offf-workers/tree/main/crates/offf-keyword-worker` |
+| **offf-yara-worker** | `reference` | `experimental` | `https://github.com/Tinuz/offf-workers/tree/main/crates/offf-yara-worker` |
 | **offf-access-service** | `reference` | `experimental` | `crates/offf-access-service` |
 | **Packed container transport** | `reference` | `reference` | `crates/offf-core/src/packed.rs` |
 | **Worker runtime state** | `reference` | `experimental` | `jobs/runtime/` (container-level) |
@@ -102,4 +102,4 @@ different tools.
 
 ---
 
-*Last updated: 2026-05-29*
+*Last updated: 2026-06-02*

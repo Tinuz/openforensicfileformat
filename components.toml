@@ -213,46 +213,46 @@ last_verified = "2026-05-31"
 classification = "reference"
 maturity = "experimental"
 release_1_0 = false
-description = "CLI for appending human annotation events to the OFFF analysis layer"
-path = "crates/offf-annotate"
+description = "CLI for appending human annotation events to the OFFF analysis layer (maintained in separate offf-workers repository)"
+path = "external:https://github.com/Tinuz/offf-workers/tree/main/crates/offf-annotate"
 docs = ["docs/annotation-extension.md"]
-tests = ["cargo test -p offf-annotate"]
+tests = ["cargo test --workspace (offf-workers)"]
 conformance_profiles = ["OFFF Extension Conformant"]
 known_limitations = [
     "minimal feature set",
     "no integration tests",
 ]
-last_verified = "2026-05-29"
+last_verified = "2026-06-02"
 
 [components.offf-keyword-worker]
 classification = "reference"
 maturity = "experimental"
 release_1_0 = false
-description = "Keyword scanning worker: reads OFFF chunks, emits keyword hit rows in append-only analysis layout"
-path = "crates/offf-keyword-worker"
+description = "Keyword scanning worker: reads OFFF chunks, emits keyword hit rows in append-only analysis layout (maintained in separate offf-workers repository)"
+path = "external:https://github.com/Tinuz/offf-workers/tree/main/crates/offf-keyword-worker"
 docs = ["docs/analysis-worker-surfaces.md"]
-tests = ["cargo test -p offf-keyword-worker", "python tests/e2e/run_cli_e2e.py"]
+tests = ["cargo test --workspace (offf-workers)"]
 conformance_profiles = ["OFFF Analysis Worker Conformant"]
 known_limitations = [
     "cross-chunk boundary matching is implemented but not conformance-tested",
     "no dedicated negative test dataset for boundary/encoding edge cases",
 ]
-last_verified = "2026-05-29"
+last_verified = "2026-06-02"
 
 [components.offf-yara-worker]
 classification = "reference"
 maturity = "experimental"
 release_1_0 = false
-description = "YARA scanning worker: evaluates YARA rules against OFFF evidence chunks"
-path = "crates/offf-yara-worker"
+description = "YARA scanning worker: evaluates YARA rules against OFFF evidence chunks (maintained in separate offf-workers repository)"
+path = "external:https://github.com/Tinuz/offf-workers/tree/main/crates/offf-yara-worker"
 docs = ["docs/analysis-worker-surfaces.md"]
-tests = ["cargo test -p offf-yara-worker", "python tests/e2e/run_cli_e2e.py"]
+tests = ["cargo test --workspace (offf-workers)"]
 conformance_profiles = ["OFFF Analysis Worker Conformant"]
 known_limitations = [
     "job output isolation hardening pending",
     "no dedicated negative test dataset",
 ]
-last_verified = "2026-05-29"
+last_verified = "2026-06-02"
 
 [components.offf-access-service]
 classification = "reference"

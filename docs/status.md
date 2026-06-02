@@ -35,9 +35,9 @@ All other components remain available, but are reference or experimental surface
 | offf-index (objects) | reference | experimental | done | unit + integration | Indexer | Object index rebuild (--from-events) experimental | 2026-05-29 |
 | offf-jobs | reference | reference | done | unit + integration | Analysis Worker | Deterministic replay experimental; plan-shards/finalize-job reference | 2026-05-29 |
 | offf-collect | reference | experimental | done | integration (single file, directory, tamper detection) | Acquisition (partial) | No dedicated E2E file_collection upload/verify cycle yet | 2026-05-31 |
-| offf-annotate | reference | experimental | done | unit (basic) | Extension | Minimal feature set; no integration tests | 2026-05-29 |
-| offf-keyword-worker | reference | experimental | done | unit + E2E | Analysis Worker | Cross-chunk boundary matching not conformance-tested | 2026-05-29 |
-| offf-yara-worker | reference | experimental | done | unit + E2E | Analysis Worker | Job output isolation hardening pending | 2026-05-29 |
+| offf-annotate | reference | experimental | done | external worker workspace tests | Extension | Moved to `Tinuz/offf-workers`; integration evidence now maintained there | 2026-06-02 |
+| offf-keyword-worker | reference | experimental | done | external worker workspace tests | Analysis Worker | Moved to `Tinuz/offf-workers`; cross-chunk conformance evidence still pending | 2026-06-02 |
+| offf-yara-worker | reference | experimental | done | external worker workspace tests | Analysis Worker | Moved to `Tinuz/offf-workers`; dedicated negative dataset still pending | 2026-06-02 |
 | offf-access-service | reference | experimental | done | unit + gRPC smoke + storage parity | Access Service | JWT/mTLS not independently security-reviewed; S3 smoke-tested only | 2026-05-29 |
 | Packed container (.offfpack) | reference | reference | done | unit | — | Not normative; verify requires unpacking; no E2E round-trip test | 2026-05-29 |
 | Worker runtime state | reference | experimental | done | unit (`offf-jobs` runtime-state artifact test) | — | Not part of OFFF Core; external schedulers may use own state store | 2026-05-31 |

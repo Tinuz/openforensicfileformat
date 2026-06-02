@@ -7,13 +7,17 @@ Purpose
 This directory contains end-to-end smoke tests for environment-dependent OFFF flows.
 These scripts are intended as fast regression checks after storage, worker, or E01 pipeline changes.
 
+Worker binaries are no longer built from this repository. Worker smoke coverage now uses the separate workers repository:
+
+- https://github.com/Tinuz/offf-workers
+
 Available Scripts
 -----------------
 
 - `../e2e/run_cli_e2e.py`
 	- Runs a local CLI chain without external infrastructure:
-	- `offf-convert` -> `offf-verify` -> `offf-keyword-worker` -> `offf-yara-worker`.
-	- Validates job-scoped analysis outputs and `result_manifest.json`.
+	- `offf-convert` -> `offf-verify`.
+	- Validates core container artifacts only (manifest, acquisition, merkle/map outputs).
 	- Writes a machine-readable report to `tests/e2e/cli-e2e-report.json`.
 
 - `phase5_minio_smoke.py`
@@ -37,6 +41,7 @@ Requirements
 - Docker Desktop running.
 - MinIO reachable at `http://localhost:9000` (for Phase 5).
 - Rust toolchain and working `cargo` build.
+- Local sibling checkout of `offf-workers` at `../offf-workers` for worker smoke scripts.
 
 Run
 ---

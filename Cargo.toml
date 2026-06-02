@@ -8,9 +8,6 @@ members = [
     "crates/offf-export",
     "crates/offf-index",
     "crates/offf-jobs",
-    "crates/offf-keyword-worker",
-    "crates/offf-yara-worker",
-    "crates/offf-annotate",
     "tests/integration",
 ]
 resolver = "2"

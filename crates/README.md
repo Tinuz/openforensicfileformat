@@ -1,7 +1,7 @@
 # OFFF Rust Crates
 
 ## Purpose
-This directory contains all Rust crates that implement OFFF conversion, verification, indexing, access services, and workers.
+This directory contains Rust crates that implement OFFF core container functionality: conversion, verification, indexing, jobs, and access services.
 
 ## Main Crates
 - `offf-core`: Shared domain types, chunk/hash logic, storage primitives, parquet helpers.
@@ -11,9 +11,11 @@ This directory contains all Rust crates that implement OFFF conversion, verifica
 - `offf-export`: Reconstruction and packed container export/import helpers.
 - `offf-jobs`: Job orchestration and runtime state artifacts.
 - `offf-access-service`: REST/gRPC access surface with policy/capability checks.
-- `offf-keyword-worker`: Keyword scanning worker.
-- `offf-yara-worker`: YARA scanning worker.
-- `offf-annotate`: Annotation and append-only annotation workflows.
+
+## Worker Split
+Worker crates (`offf-keyword-worker`, `offf-yara-worker`, `offf-annotate`) are now maintained in:
+
+- https://github.com/Tinuz/offf-workers
 
 ## Build and Test
 ```bash

@@ -10,6 +10,7 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+WORKERS_ROOT = ROOT.parent / "offf-workers"
 BUCKET = "offf-smoke"
 PREFIX = "cases/phase5-smoke.offf"
 CASE_URI = f"s3://{BUCKET}/{PREFIX}"
@@ -30,6 +31,15 @@ def run(cmd: list[str], *, env: dict[str, str] | None = None, capture: bool = Fa
         text=True,
         capture_output=capture,
     )
+
+
+def ensure_workers_repo() -> Path:
+    if not WORKERS_ROOT.exists():
+        raise RuntimeError(
+            "offf-workers repository not found. Expected sibling checkout at "
+            f"{WORKERS_ROOT}. Clone https://github.com/Tinuz/offf-workers.git first."
+        )
+    return WORKERS_ROOT
 
 
 def aws_docker_cmd(*args: str) -> list[str]:
@@ -167,13 +177,17 @@ def read_provenance_lines() -> int:
 
 
 def keyword_worker_exe() -> Path:
-    exe = ROOT / "target" / "debug" / ("offf-keyword-worker.exe" if os.name == "nt" else "offf-keyword-worker")
+    workers_root = ensure_workers_repo()
+    exe = workers_root / "target" / "debug" / (
+        "offf-keyword-worker.exe" if os.name == "nt" else "offf-keyword-worker"
+    )
     if not exe.exists():
         raise FileNotFoundError(f"keyword worker binary not found: {exe}")
     return exe
 
 
 def run_concurrent_keyword_workers(env: dict[str, str], base_job_path: Path, workers: int = 4) -> None:
+    workers_root = ensure_workers_repo()
     exe = keyword_worker_exe()
     base_job = json.loads(base_job_path.read_text(encoding="utf-8"))
     procs: list[subprocess.Popen[str]] = []
@@ -197,7 +211,7 @@ def run_concurrent_keyword_workers(env: dict[str, str], base_job_path: Path, wor
         procs.append(
             subprocess.Popen(
                 cmd,
-                cwd=ROOT,
+                cwd=workers_root,
                 env=env,
                 text=True,
                 stdout=subprocess.PIPE,
@@ -221,6 +235,7 @@ def main() -> int:
         raise RuntimeError("docker command not found")
 
     with tempfile.TemporaryDirectory(prefix="offf-phase5-") as tmp:
+        workers_root = ensure_workers_repo()
         tmp_dir = Path(tmp)
         check_minio_health()
         local_container = make_tiny_offf_container(tmp_dir)
@@ -239,6 +254,8 @@ def main() -> int:
             [
                 "cargo",
                 "run",
+                "--manifest-path",
+                str(workers_root / "Cargo.toml"),
                 "-p",
                 "offf-keyword-worker",
                 "--",
@@ -255,6 +272,8 @@ def main() -> int:
             [
                 "cargo",
                 "run",
+                "--manifest-path",
+                str(workers_root / "Cargo.toml"),
                 "-p",
                 "offf-yara-worker",
                 "--",
@@ -273,7 +292,17 @@ def main() -> int:
         object_exists(f"{PREFIX}/analysis/jobs/job-smoke-yara/yara_hits.parquet")
         object_exists(f"{PREFIX}/analysis/jobs/job-smoke-yara/result_manifest.json")
 
-        run(["cargo", "build", "-p", "offf-keyword-worker"], env=env)
+        run(
+            [
+                "cargo",
+                "build",
+                "--manifest-path",
+                str(workers_root / "Cargo.toml"),
+                "-p",
+                "offf-keyword-worker",
+            ],
+            env=env,
+        )
         before = read_provenance_lines()
         run_concurrent_keyword_workers(env, keyword_job, workers=4)
         after = read_provenance_lines()
