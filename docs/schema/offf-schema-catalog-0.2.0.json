@@ -16,6 +16,11 @@
     "derivation_row": "offf-derivation-row-0.2.0.schema.json",
     "derived_object_store": "offf-derived-object-store-0.2.0.schema.json",
     "lineage_report": "offf-lineage-report-0.2.0.schema.json",
-    "object_producing_result_manifest": "offf-object-producing-result-manifest-0.2.0.schema.json"
+    "object_producing_result_manifest": "offf-object-producing-result-manifest-0.2.0.schema.json",
+    "case_manifest": "offf-case-manifest-0.1.0.schema.json",
+    "evidence_roots_registry": "offf-evidence-roots-registry-0.1.0.schema.json",
+    "root_descriptor": "offf-root-descriptor-0.1.0.schema.json",
+    "case_provenance_event": "offf-case-provenance-event-0.1.0.schema.json",
+    "case_verify_report": "offf-case-verify-report-0.1.0.schema.json"
   }
 }

@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://offf.dev/schema/offf-root-descriptor-0.1.0.schema.json",
+  "title": "OFFF Root Descriptor v0.1.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "root_id",
+    "root_type",
+    "description",
+    "root_ref",
+    "manifest_hash",
+    "verify_status",
+    "attached_at",
+    "attached_by",
+    "status"
+  ],
+  "properties": {
+    "root_id": { "type": "string", "minLength": 1 },
+    "root_type": {
+      "type": "string",
+      "enum": [
+        "block_image",
+        "file_collection",
+        "logical_extraction",
+        "api_export",
+        "mailbox_export",
+        "mixed"
+      ]
+    },
+    "description": { "type": "string", "minLength": 1 },
+    "root_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref_type", "ref_value", "availability"],
+      "properties": {
+        "ref_type": {
+          "type": "string",
+          "enum": ["embedded", "relative_path", "absolute_path", "uri"]
+        },
+        "ref_value": { "type": "string", "minLength": 1 },
+        "expected_manifest_hash": {
+          "type": ["string", "null"],
+          "pattern": "^(sha256:[0-9a-f]{64})?$"
+        },
+        "expected_root_id": { "type": ["string", "null"] },
+        "expected_root_type": { "type": ["string", "null"] },
+        "availability": {
+          "type": "string",
+          "enum": ["online", "offline", "missing", "unknown"]
+        }
+      }
+    },
+    "manifest_hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "verify_status": {
+      "type": "string",
+      "enum": ["unknown", "valid", "warning", "invalid", "missing"]
+    },
+    "attached_at": { "type": "string", "format": "date-time" },
+    "attached_by": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool_id", "tool_version", "actor"],
+      "properties": {
+        "tool_id": { "type": "string", "minLength": 1 },
+        "tool_version": { "type": "string", "minLength": 1 },
+        "actor": { "type": "string", "minLength": 1 }
+      }
+    },
+    "status": {
+      "type": "string",
+      "enum": ["active", "archived", "detached", "missing"]
+    }
+  }
+}

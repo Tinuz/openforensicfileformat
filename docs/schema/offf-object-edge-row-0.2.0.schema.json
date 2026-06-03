@@ -15,6 +15,8 @@
     "edge_id": { "type": "string", "minLength": 1 },
     "parent_object_id": { "type": "string", "minLength": 1 },
     "child_object_id": { "type": "string", "minLength": 1 },
+    "parent_root_id": { "type": ["string", "null"], "minLength": 1 },
+    "child_root_id": { "type": ["string", "null"], "minLength": 1 },
     "relation_type": {
       "type": "string",
       "enum": [

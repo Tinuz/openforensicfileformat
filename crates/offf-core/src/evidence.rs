@@ -22,6 +22,7 @@ use crate::error::OfffError;
 /// The path follows the same two-level shard pattern as chunks:
 /// `{base}/evidence/objects/sha256/{ab}/{cd}/{hex}.bin`
 pub fn evidence_object_path(base: &Path, sha256_hex: &str) -> PathBuf {
+    let sha256_hex = sha256_hex.strip_prefix("sha256:").unwrap_or(sha256_hex);
     assert!(
         sha256_hex.len() >= 4,
         "sha256_hex too short: {sha256_hex}"
@@ -78,6 +79,7 @@ pub fn write_evidence_object(base: &Path, content: &[u8]) -> Result<String, Offf
 /// SHA-256 of the stored bytes does not match `sha256_ref`.
 pub fn read_evidence_object(base: &Path, sha256_ref: &str) -> Result<Vec<u8>, OfffError> {
     let path = evidence_object_path(base, sha256_ref);
+    let expected = sha256_ref.strip_prefix("sha256:").unwrap_or(sha256_ref);
     let content = fs::read(&path).map_err(|e| {
         OfffError::Io(std::io::Error::new(
             e.kind(),
@@ -90,10 +92,10 @@ pub fn read_evidence_object(base: &Path, sha256_ref: &str) -> Result<Vec<u8>, Of
     })?;
 
     let computed = hex_sha256(&content);
-    if computed != sha256_ref {
+    if computed != expected {
         return Err(OfffError::HashMismatch {
             chunk_id: sha256_ref.to_string(),
-            expected: sha256_ref.to_string(),
+            expected: expected.to_string(),
             actual: computed,
         });
     }

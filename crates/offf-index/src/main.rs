@@ -9,6 +9,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 use offf_core::{
+    build_case_global_indexes,
     chunk::hex_sha256,
     lineage::{export_dot, export_lineage_json},
     ntfs::index_ntfs,
@@ -20,6 +21,7 @@ use offf_core::{
     },
     partition::{detect_and_parse, detect_volume_type},
     provenance::ProvenanceWriter,
+    read_case_cross_root_relations,
     rebuild_object_index_from_events,
     storage::read_file_verified,
     types::{
@@ -106,6 +108,17 @@ enum Command {
         #[arg(long)]
         out: Option<PathBuf>,
     },
+    /// Inspect cross-root relations for an OFFF case
+    CaseCrossRoot {
+        /// Path to the OFFF case directory
+        case: PathBuf,
+        /// Rebuild case global indexes before reading relations
+        #[arg(long)]
+        rebuild: bool,
+        /// Output format: table (default) or json
+        #[arg(long, default_value = "table")]
+        format: String,
+    },
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -145,7 +158,65 @@ fn main() -> Result<()> {
             format,
             out,
         } => cmd_export_lineage(&container, &format, out.as_deref()),
+        Command::CaseCrossRoot {
+            case,
+            rebuild,
+            format,
+        } => cmd_case_cross_root(&case, rebuild, &format),
     }
+}
+
+fn cmd_case_cross_root(case_root: &Path, rebuild: bool, format: &str) -> Result<()> {
+    if rebuild {
+        let stats = build_case_global_indexes(case_root)
+            .with_context(|| format!("failed to build case indexes for {}", case_root.display()))?;
+        println!(
+            "Rebuilt case indexes: objects={}, edges={}, derivations={}, cross_root_relations={}",
+            stats.object_count,
+            stats.edge_count,
+            stats.derivation_count,
+            stats.cross_root_relation_count
+        );
+    }
+
+    let relations = read_case_cross_root_relations(case_root).with_context(|| {
+        format!(
+            "failed to read cross-root relations from case {}",
+            case_root.display()
+        )
+    })?;
+
+    match format {
+        "json" => {
+            println!("{}", serde_json::to_string_pretty(&relations)?);
+        }
+        "table" => {
+            println!("Case: {}", case_root.display());
+            println!("Cross-root relations: {}", relations.len());
+            if relations.is_empty() {
+                return Ok(());
+            }
+            println!(
+                "{:<12} {:<24} {:<18} {:<14} {:<14}",
+                "kind", "relation_id", "relation_type", "parent_root", "child_root"
+            );
+            for rel in relations {
+                println!(
+                    "{:<12} {:<24} {:<18} {:<14} {:<14}",
+                    rel.relation_kind,
+                    rel.relation_id,
+                    rel.relation_type,
+                    rel.parent_root_id,
+                    rel.child_root_id,
+                );
+            }
+        }
+        other => {
+            anyhow::bail!("unsupported format '{other}', expected 'table' or 'json'");
+        }
+    }
+
+    Ok(())
 }
 
 // ── offf-index partitions ─────────────────────────────────────────────────────
@@ -765,6 +836,7 @@ fn cmd_objects_from_filesystem(base: &Path, hash_content: &str, force: bool) -> 
                 storage_ref: None,
                 content_ref: Some(ObjectContentRef {
                     ref_type: "filesystem".to_string(),
+                    root_id: None,
                     filesystem_id: Some(fs_key.clone()),
                     file_id: None,
                     file_index_path: Some(format!("indexes/filesystems/{fs_key}/file_index.parquet")),
@@ -829,6 +901,7 @@ fn cmd_objects_from_filesystem(base: &Path, hash_content: &str, force: bool) -> 
                     storage_ref: None,
                     content_ref: Some(ObjectContentRef {
                         ref_type: "filesystem_file".to_string(),
+                        root_id: None,
                         filesystem_id: Some(fs_key.clone()),
                         file_id: Some(fid.clone()),
                         file_index_path: Some(format!("indexes/filesystems/{fs_key}/file_index.parquet")),
@@ -855,6 +928,8 @@ fn cmd_objects_from_filesystem(base: &Path, hash_content: &str, force: bool) -> 
                     edge_id,
                     parent_object_id: parent_id.clone(),
                     child_object_id: object_id.clone(),
+                    parent_root_id: None,
+                    child_root_id: None,
                     relation_type: "contains".to_string(),
                     method: Some("filesystem_index_materialization".to_string()),
                     logical_path: Some(normalized_path.clone()),
@@ -872,6 +947,8 @@ fn cmd_objects_from_filesystem(base: &Path, hash_content: &str, force: bool) -> 
                     derivation_id,
                     parent_object_id: parent_id.clone(),
                     child_object_id: object_id,
+                    parent_root_id: None,
+                    child_root_id: None,
                     job_id: job_id.clone(),
                     method: "filesystem_index_materialization".to_string(),
                     tool_id: TOOL_NAME.to_string(),

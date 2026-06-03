@@ -268,6 +268,8 @@ fn run(args: Args) -> Result<String> {
                     edge_id: format!("edge-{}-{}", &root_obj_id[4..], &obj_id[4..]),
                     parent_object_id: root_obj_id.clone(),
                     child_object_id: obj_id,
+                    parent_root_id: Some(root_obj_id.clone()),
+                    child_root_id: Some(root_obj_id.clone()),
                     relation_type: "contains".to_string(),
                     method: None,
                     logical_path: Some(rel.clone()),

@@ -755,6 +755,8 @@ pub fn write_object_edges(path: &Path, rows: &[ObjectEdgeRow]) -> Result<(), Off
         Field::new("edge_id", DataType::Utf8, false),
         Field::new("parent_object_id", DataType::Utf8, false),
         Field::new("child_object_id", DataType::Utf8, false),
+        Field::new("parent_root_id", DataType::Utf8, true),
+        Field::new("child_root_id", DataType::Utf8, true),
         Field::new("relation_type", DataType::Utf8, false),
         Field::new("method", DataType::Utf8, true),
         Field::new("logical_path", DataType::Utf8, true),
@@ -775,6 +777,12 @@ pub fn write_object_edges(path: &Path, rows: &[ObjectEdgeRow]) -> Result<(), Off
             )) as ArrayRef,
             Arc::new(StringArray::from_iter_values(
                 rows.iter().map(|r| r.child_object_id.as_str()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter(
+                rows.iter().map(|r| r.parent_root_id.as_deref()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter(
+                rows.iter().map(|r| r.child_root_id.as_deref()),
             )) as ArrayRef,
             Arc::new(StringArray::from_iter_values(
                 rows.iter().map(|r| r.relation_type.as_str()),
@@ -814,6 +822,8 @@ pub fn read_object_edges(path: &Path) -> Result<Vec<ObjectEdgeRow>, OfffError> {
         let edge_id = as_str_col(&batch, "edge_id")?;
         let parent_object_id = as_str_col(&batch, "parent_object_id")?;
         let child_object_id = as_str_col(&batch, "child_object_id")?;
+        let parent_root_id = as_str_col(&batch, "parent_root_id").ok();
+        let child_root_id = as_str_col(&batch, "child_root_id").ok();
         let relation_type = as_str_col(&batch, "relation_type")?;
         let method = as_str_col(&batch, "method")?;
         let logical_path = as_str_col(&batch, "logical_path")?;
@@ -827,6 +837,8 @@ pub fn read_object_edges(path: &Path) -> Result<Vec<ObjectEdgeRow>, OfffError> {
                 edge_id: edge_id.value(i).to_string(),
                 parent_object_id: parent_object_id.value(i).to_string(),
                 child_object_id: child_object_id.value(i).to_string(),
+                parent_root_id: parent_root_id.as_ref().and_then(|col| str_value_or_none(col, i)),
+                child_root_id: child_root_id.as_ref().and_then(|col| str_value_or_none(col, i)),
                 relation_type: relation_type.value(i).to_string(),
                 method: str_value_or_none(method, i),
                 logical_path: str_value_or_none(logical_path, i),
@@ -848,6 +860,8 @@ pub fn write_derivations(path: &Path, rows: &[DerivationRow]) -> Result<(), Offf
         Field::new("derivation_id", DataType::Utf8, false),
         Field::new("parent_object_id", DataType::Utf8, false),
         Field::new("child_object_id", DataType::Utf8, false),
+        Field::new("parent_root_id", DataType::Utf8, true),
+        Field::new("child_root_id", DataType::Utf8, true),
         Field::new("job_id", DataType::Utf8, false),
         Field::new("method", DataType::Utf8, false),
         Field::new("tool_id", DataType::Utf8, false),
@@ -873,6 +887,12 @@ pub fn write_derivations(path: &Path, rows: &[DerivationRow]) -> Result<(), Offf
             )) as ArrayRef,
             Arc::new(StringArray::from_iter_values(
                 rows.iter().map(|r| r.child_object_id.as_str()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter(
+                rows.iter().map(|r| r.parent_root_id.as_deref()),
+            )) as ArrayRef,
+            Arc::new(StringArray::from_iter(
+                rows.iter().map(|r| r.child_root_id.as_deref()),
             )) as ArrayRef,
             Arc::new(StringArray::from_iter_values(
                 rows.iter().map(|r| r.job_id.as_str()),
@@ -929,6 +949,8 @@ pub fn read_derivations(path: &Path) -> Result<Vec<DerivationRow>, OfffError> {
         let derivation_id = as_str_col(&batch, "derivation_id")?;
         let parent_object_id = as_str_col(&batch, "parent_object_id")?;
         let child_object_id = as_str_col(&batch, "child_object_id")?;
+        let parent_root_id = as_str_col(&batch, "parent_root_id").ok();
+        let child_root_id = as_str_col(&batch, "child_root_id").ok();
         let job_id = as_str_col(&batch, "job_id")?;
         let method = as_str_col(&batch, "method")?;
         let tool_id = as_str_col(&batch, "tool_id")?;
@@ -947,6 +969,8 @@ pub fn read_derivations(path: &Path) -> Result<Vec<DerivationRow>, OfffError> {
                 derivation_id: derivation_id.value(i).to_string(),
                 parent_object_id: parent_object_id.value(i).to_string(),
                 child_object_id: child_object_id.value(i).to_string(),
+                parent_root_id: parent_root_id.as_ref().and_then(|col| str_value_or_none(col, i)),
+                child_root_id: child_root_id.as_ref().and_then(|col| str_value_or_none(col, i)),
                 job_id: job_id.value(i).to_string(),
                 method: method.value(i).to_string(),
                 tool_id: tool_id.value(i).to_string(),
@@ -1068,6 +1092,8 @@ pub fn for_each_edge_batch(
         let edge_id = as_str_col(&batch, "edge_id")?;
         let parent_object_id = as_str_col(&batch, "parent_object_id")?;
         let child_object_id = as_str_col(&batch, "child_object_id")?;
+        let parent_root_id = as_str_col(&batch, "parent_root_id").ok();
+        let child_root_id = as_str_col(&batch, "child_root_id").ok();
         let relation_type = as_str_col(&batch, "relation_type")?;
         let method = as_str_col(&batch, "method")?;
         let logical_path = as_str_col(&batch, "logical_path")?;
@@ -1081,6 +1107,8 @@ pub fn for_each_edge_batch(
                 edge_id: edge_id.value(i).to_string(),
                 parent_object_id: parent_object_id.value(i).to_string(),
                 child_object_id: child_object_id.value(i).to_string(),
+                parent_root_id: parent_root_id.as_ref().and_then(|col| str_value_or_none(col, i)),
+                child_root_id: child_root_id.as_ref().and_then(|col| str_value_or_none(col, i)),
                 relation_type: relation_type.value(i).to_string(),
                 method: str_value_or_none(method, i),
                 logical_path: str_value_or_none(logical_path, i),
@@ -1113,6 +1141,8 @@ pub fn for_each_derivation_batch(
         let derivation_id = as_str_col(&batch, "derivation_id")?;
         let parent_object_id = as_str_col(&batch, "parent_object_id")?;
         let child_object_id = as_str_col(&batch, "child_object_id")?;
+        let parent_root_id = as_str_col(&batch, "parent_root_id").ok();
+        let child_root_id = as_str_col(&batch, "child_root_id").ok();
         let job_id = as_str_col(&batch, "job_id")?;
         let method = as_str_col(&batch, "method")?;
         let tool_id = as_str_col(&batch, "tool_id")?;
@@ -1131,6 +1161,8 @@ pub fn for_each_derivation_batch(
                 derivation_id: derivation_id.value(i).to_string(),
                 parent_object_id: parent_object_id.value(i).to_string(),
                 child_object_id: child_object_id.value(i).to_string(),
+                parent_root_id: parent_root_id.as_ref().and_then(|col| str_value_or_none(col, i)),
+                child_root_id: child_root_id.as_ref().and_then(|col| str_value_or_none(col, i)),
                 job_id: job_id.value(i).to_string(),
                 method: method.value(i).to_string(),
                 tool_id: tool_id.value(i).to_string(),
@@ -1277,6 +1309,8 @@ pub fn write_object_edges_batched(
         Field::new("edge_id", DataType::Utf8, false),
         Field::new("parent_object_id", DataType::Utf8, false),
         Field::new("child_object_id", DataType::Utf8, false),
+        Field::new("parent_root_id", DataType::Utf8, true),
+        Field::new("child_root_id", DataType::Utf8, true),
         Field::new("relation_type", DataType::Utf8, false),
         Field::new("method", DataType::Utf8, true),
         Field::new("logical_path", DataType::Utf8, true),
@@ -1306,6 +1340,12 @@ pub fn write_object_edges_batched(
                 )) as ArrayRef,
                 Arc::new(StringArray::from_iter_values(
                     rows.iter().map(|r| r.child_object_id.as_str()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter(
+                    rows.iter().map(|r| r.parent_root_id.as_deref()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter(
+                    rows.iter().map(|r| r.child_root_id.as_deref()),
                 )) as ArrayRef,
                 Arc::new(StringArray::from_iter_values(
                     rows.iter().map(|r| r.relation_type.as_str()),
@@ -1344,6 +1384,8 @@ pub fn write_derivations_batched(
         Field::new("derivation_id", DataType::Utf8, false),
         Field::new("parent_object_id", DataType::Utf8, false),
         Field::new("child_object_id", DataType::Utf8, false),
+        Field::new("parent_root_id", DataType::Utf8, true),
+        Field::new("child_root_id", DataType::Utf8, true),
         Field::new("job_id", DataType::Utf8, false),
         Field::new("method", DataType::Utf8, false),
         Field::new("tool_id", DataType::Utf8, false),
@@ -1378,6 +1420,12 @@ pub fn write_derivations_batched(
                 )) as ArrayRef,
                 Arc::new(StringArray::from_iter_values(
                     rows.iter().map(|r| r.child_object_id.as_str()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter(
+                    rows.iter().map(|r| r.parent_root_id.as_deref()),
+                )) as ArrayRef,
+                Arc::new(StringArray::from_iter(
+                    rows.iter().map(|r| r.child_root_id.as_deref()),
                 )) as ArrayRef,
                 Arc::new(StringArray::from_iter_values(
                     rows.iter().map(|r| r.job_id.as_str()),

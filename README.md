@@ -165,6 +165,11 @@ cargo run -p offf-export -- export sample.offf --output reconstructed.dd
 cargo run -p offf-index -- partitions sample.offf
 ```
 
+- Inspect cross-root relations in a case:
+```bash
+cargo run -p offf-index -- case-cross-root sample.offf --rebuild --format table
+```
+
 - Create a keyword job manifest:
 ```bash
 cargo run -p offf-jobs -- create-keyword --case sample.offf --keywords password,secret

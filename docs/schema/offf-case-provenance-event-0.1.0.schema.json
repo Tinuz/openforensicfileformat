@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://offf.dev/schema/offf-case-provenance-event-0.1.0.schema.json",
+  "title": "OFFF Case Provenance Event v0.1.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "event_id",
+    "case_id",
+    "timestamp",
+    "actor",
+    "tool",
+    "action",
+    "result",
+    "details"
+  ],
+  "properties": {
+    "event_id": { "type": "string", "minLength": 1 },
+    "case_id": { "type": "string", "minLength": 1 },
+    "root_id": { "type": ["string", "null"] },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "actor": { "type": "string", "minLength": 1 },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool_id", "tool_version"],
+      "properties": {
+        "tool_id": { "type": "string", "minLength": 1 },
+        "tool_version": { "type": "string", "minLength": 1 }
+      }
+    },
+    "action": {
+      "type": "string",
+      "enum": [
+        "case_created",
+        "root_attached",
+        "root_detached",
+        "global_index_built",
+        "case_verified",
+        "case_verify_failed"
+      ]
+    },
+    "result": { "type": "string", "enum": ["success", "warning", "failure"] },
+    "details": { "type": "object" }
+  }
+}

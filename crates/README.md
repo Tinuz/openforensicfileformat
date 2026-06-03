@@ -7,7 +7,7 @@ This directory contains Rust crates that implement OFFF core container functiona
 - `offf-core`: Shared domain types, chunk/hash logic, storage primitives, parquet helpers.
 - `offf-convert`: Raw/E01 to OFFF conversion.
 - `offf-verify`: Container integrity and consistency verification.
-- `offf-index`: Partition/filesystem/object indexing.
+- `offf-index`: Partition/filesystem/object indexing and case-level cross-root relation inspection.
 - `offf-export`: Reconstruction and packed container export/import helpers.
 - `offf-jobs`: Job orchestration and runtime state artifacts.
 - `offf-access-service`: REST/gRPC access surface with policy/capability checks.

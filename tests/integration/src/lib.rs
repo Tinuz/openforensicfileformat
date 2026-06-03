@@ -817,6 +817,8 @@ fn make_edge(edge_id: &str, parent: &str, child: &str) -> ObjectEdgeRow {
         edge_id: edge_id.to_string(),
         parent_object_id: parent.to_string(),
         child_object_id: child.to_string(),
+        parent_root_id: None,
+        child_root_id: None,
         relation_type: "contains".to_string(),
         method: Some("carved".to_string()),
         logical_path: None,
@@ -833,6 +835,8 @@ fn make_derivation(deriv_id: &str, parent: &str, child: &str) -> DerivationRow {
         derivation_id: deriv_id.to_string(),
         parent_object_id: parent.to_string(),
         child_object_id: child.to_string(),
+        parent_root_id: None,
+        child_root_id: None,
         job_id: "job-1".to_string(),
         method: "extract".to_string(),
         tool_id: "tool-a".to_string(),
@@ -1650,4 +1654,548 @@ fn file_collection_tamper_detection() {
     fs::write(evidence_object_path(&container, storage_ref), b"corrupted").unwrap();
 
     assert!(!run_verify(&container).success());
+}
+
+#[test]
+fn case_global_index_writes_explicit_cross_root_relations() {
+    use offf_core::types::{
+        AcquisitionMode, CaseGlobalIndexes, CaseManifest, EvidenceRoot, EvidenceRootsRegistry,
+        ManifestIndexes, ManifestJson, ObjectContentRef, RootAvailability, RootDescriptor,
+        RootRef, RootRefType, RootRegistryStatus, RootVerifyStatus, ToolActorInfo, ToolInfo,
+        OFFF_CASE_SCHEMA_VERSION, OFFF_V2_VERSION,
+    };
+
+    fn make_actor() -> ToolActorInfo {
+        ToolActorInfo {
+            tool_id: "offf-integration-test".to_string(),
+            tool_version: "0.1.0".to_string(),
+            actor: "system".to_string(),
+        }
+    }
+
+    fn write_root_container(
+        root_path: &Path,
+        root_id: &str,
+        file_object_id: &str,
+        file_bytes: &[u8],
+        cross_child: Option<(&str, &str)>,
+    ) -> String {
+        fs::create_dir_all(root_path.join("indexes/objects")).unwrap();
+        let file_sha = offf_core::evidence::write_evidence_object(root_path, file_bytes).unwrap();
+        let storage_ref = format!("sha256:{file_sha}");
+        let root_object_id = format!("{root_id}-root");
+
+        let objects = vec![
+            DiscoveredObjectRow {
+                object_id: root_object_id.clone(),
+                object_type: "collection_root".to_string(),
+                name: Some(root_id.to_string()),
+                logical_path: Some("/".to_string()),
+                media_type: None,
+                size_bytes: None,
+                sha256: None,
+                source_layer: "collection".to_string(),
+                storage_ref: None,
+                content_ref: None,
+                content_hash_status: None,
+                root_source_ref: None,
+                root_id: Some(root_id.to_string()),
+                collection_relative_path: None,
+                created_by_job_id: None,
+                parser_status: "ok".to_string(),
+                provenance_ref: None,
+                schema_version: OFFF_V2_VERSION.to_string(),
+                original_created_at: None,
+                original_modified_at: None,
+                original_accessed_at: None,
+            },
+            DiscoveredObjectRow {
+                object_id: file_object_id.to_string(),
+                object_type: "file".to_string(),
+                name: Some(format!("{root_id}.bin")),
+                logical_path: Some(format!("/{root_id}.bin")),
+                media_type: Some("application/octet-stream".to_string()),
+                size_bytes: Some(file_bytes.len() as u64),
+                sha256: Some(storage_ref.clone()),
+                source_layer: "collection".to_string(),
+                storage_ref: Some(storage_ref.clone()),
+                content_ref: Some(ObjectContentRef {
+                    ref_type: "evidence_object_store".to_string(),
+                    root_id: Some(root_id.to_string()),
+                    filesystem_id: None,
+                    file_id: None,
+                    file_index_path: None,
+                    storage_ref: Some(storage_ref.clone()),
+                }),
+                content_hash_status: Some("verified".to_string()),
+                root_source_ref: Some(root_object_id.clone()),
+                root_id: Some(root_id.to_string()),
+                collection_relative_path: Some(format!("{root_id}.bin")),
+                created_by_job_id: None,
+                parser_status: "ok".to_string(),
+                provenance_ref: None,
+                schema_version: OFFF_V2_VERSION.to_string(),
+                original_created_at: None,
+                original_modified_at: None,
+                original_accessed_at: None,
+            },
+        ];
+
+        let mut edges = vec![ObjectEdgeRow {
+            edge_id: format!("edge-{root_id}-local"),
+            parent_object_id: root_object_id.clone(),
+            child_object_id: file_object_id.to_string(),
+            parent_root_id: Some(root_id.to_string()),
+            child_root_id: Some(root_id.to_string()),
+            relation_type: "contains".to_string(),
+            method: Some("collection_capture".to_string()),
+            logical_path: Some(format!("{root_id}.bin")),
+            sequence: Some(1),
+            created_by_job_id: None,
+            provenance_ref: None,
+            schema_version: OFFF_V2_VERSION.to_string(),
+        }];
+
+        if let Some((cross_child_object_id, cross_child_root_id)) = cross_child {
+            edges.push(ObjectEdgeRow {
+                edge_id: format!("edge-{root_id}-cross"),
+                parent_object_id: root_object_id,
+                child_object_id: cross_child_object_id.to_string(),
+                parent_root_id: Some(root_id.to_string()),
+                child_root_id: Some(cross_child_root_id.to_string()),
+                relation_type: "references".to_string(),
+                method: Some("cross_root_reference".to_string()),
+                logical_path: None,
+                sequence: None,
+                created_by_job_id: None,
+                provenance_ref: None,
+                schema_version: OFFF_V2_VERSION.to_string(),
+            });
+        }
+
+        offf_core::parquet_io::write_object_index(
+            &root_path.join("indexes/objects/object_index.parquet"),
+            &objects,
+        )
+        .unwrap();
+        offf_core::parquet_io::write_object_edges(
+            &root_path.join("indexes/objects/object_edges.parquet"),
+            &edges,
+        )
+        .unwrap();
+        offf_core::parquet_io::write_derivations(
+            &root_path.join("indexes/objects/derivations.parquet"),
+            &[],
+        )
+        .unwrap();
+
+        let manifest = ManifestJson {
+            offf_version: OFFF_VERSION.to_string(),
+            container_id: format!("urn:offf:root:{root_id}"),
+            created_at: chrono::Utc::now(),
+            created_by_tool: ToolInfo {
+                name: "offf-integration-test".to_string(),
+                version: "0.1.0".to_string(),
+            },
+            acquisition_mode: Some(AcquisitionMode::FileCollection),
+            source: None,
+            hashes: None,
+            chunking: None,
+            evidence_roots: Some(vec![EvidenceRoot {
+                root_id: root_id.to_string(),
+                root_type: "file_collection".to_string(),
+                description: Some(format!("{root_id} root")),
+                object_count: Some(objects.len() as u64),
+                root_hash: None,
+            }]),
+            limitations: None,
+            indexes: ManifestIndexes {
+                physical_to_chunk: None,
+                object_index: Some("indexes/objects/object_index.parquet".to_string()),
+                object_edges: Some("indexes/objects/object_edges.parquet".to_string()),
+            },
+            extensions: None,
+        };
+        fs::write(
+            root_path.join("manifest.json"),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        format!(
+            "sha256:{}",
+            hex_sha256(&fs::read(root_path.join("manifest.json")).unwrap())
+        )
+    }
+
+    let tmp = TempDir::new().unwrap();
+    let case_root = tmp.path().join("case");
+    let root_a = tmp.path().join("root-a");
+    let root_b = tmp.path().join("root-b");
+    fs::create_dir_all(&root_a).unwrap();
+    fs::create_dir_all(&root_b).unwrap();
+
+    let root_b_file = "obj-root-b-file";
+    let root_a_hash = write_root_container(
+        &root_a,
+        "root-a",
+        "obj-root-a-file",
+        b"alpha",
+        Some((root_b_file, "root-b")),
+    );
+    let root_b_hash = write_root_container(&root_b, "root-b", root_b_file, b"beta", None);
+
+    let case_manifest = CaseManifest {
+        schema_version: OFFF_CASE_SCHEMA_VERSION.to_string(),
+        offf_version: OFFF_VERSION.to_string(),
+        case_id: "case-cross-root".to_string(),
+        title: Some("cross-root test".to_string()),
+        created_at: chrono::Utc::now(),
+        created_by: make_actor(),
+        root_count: 2,
+        roots_registry_path: offf_core::CASE_ROOTS_REGISTRY_FILE.to_string(),
+        global_indexes: CaseGlobalIndexes {
+            object_index: offf_core::CASE_OBJECT_INDEX_FILE.to_string(),
+            object_edges: offf_core::CASE_OBJECT_EDGES_FILE.to_string(),
+            derivations: offf_core::CASE_DERIVATIONS_FILE.to_string(),
+            root_summary: None,
+            cross_root_relations: None,
+        },
+        provenance_paths: vec![offf_core::CASE_PROVENANCE_FILE.to_string()],
+        verify_reports: vec![],
+        limitations: vec![],
+    };
+
+    let roots_registry = EvidenceRootsRegistry {
+        schema_version: OFFF_CASE_SCHEMA_VERSION.to_string(),
+        case_id: "case-cross-root".to_string(),
+        roots: vec![
+            RootDescriptor {
+                root_id: "root-a".to_string(),
+                root_type: "file_collection".to_string(),
+                description: "root a".to_string(),
+                root_ref: RootRef {
+                    ref_type: RootRefType::AbsolutePath,
+                    ref_value: root_a.display().to_string(),
+                    expected_manifest_hash: Some(root_a_hash.clone()),
+                    expected_root_id: Some("root-a".to_string()),
+                    expected_root_type: Some("file_collection".to_string()),
+                    availability: RootAvailability::Online,
+                },
+                manifest_hash: root_a_hash,
+                verify_status: RootVerifyStatus::Valid,
+                attached_at: chrono::Utc::now(),
+                attached_by: make_actor(),
+                status: RootRegistryStatus::Active,
+            },
+            RootDescriptor {
+                root_id: "root-b".to_string(),
+                root_type: "file_collection".to_string(),
+                description: "root b".to_string(),
+                root_ref: RootRef {
+                    ref_type: RootRefType::AbsolutePath,
+                    ref_value: root_b.display().to_string(),
+                    expected_manifest_hash: Some(root_b_hash.clone()),
+                    expected_root_id: Some("root-b".to_string()),
+                    expected_root_type: Some("file_collection".to_string()),
+                    availability: RootAvailability::Online,
+                },
+                manifest_hash: root_b_hash,
+                verify_status: RootVerifyStatus::Valid,
+                attached_at: chrono::Utc::now(),
+                attached_by: make_actor(),
+                status: RootRegistryStatus::Active,
+            },
+        ],
+    };
+
+    offf_core::create_case(&case_root, &case_manifest, &roots_registry).unwrap();
+    let build = offf_core::build_case_global_indexes(&case_root).unwrap();
+    assert_eq!(build.cross_root_relation_count, 1);
+
+    let relations = offf_core::read_case_cross_root_relations(&case_root).unwrap();
+    assert_eq!(relations.len(), 1);
+    assert_eq!(relations[0].relation_kind, "edge");
+    assert_eq!(relations[0].relation_type, "references");
+    assert_eq!(relations[0].parent_root_id, "root-a");
+    assert_eq!(relations[0].child_root_id, "root-b");
+    assert_eq!(relations[0].child_object_id, root_b_file);
+}
+
+#[test]
+fn case_global_index_writes_derivation_cross_root_relations() {
+    use offf_core::types::{
+        AcquisitionMode, CaseGlobalIndexes, CaseManifest, EvidenceRoot, EvidenceRootsRegistry,
+        ManifestIndexes, ManifestJson, ObjectContentRef, RootAvailability, RootDescriptor,
+        RootRef, RootRefType, RootRegistryStatus, RootVerifyStatus, ToolActorInfo, ToolInfo,
+        OFFF_CASE_SCHEMA_VERSION, OFFF_V2_VERSION,
+    };
+
+    fn make_actor() -> ToolActorInfo {
+        ToolActorInfo {
+            tool_id: "offf-integration-test".to_string(),
+            tool_version: "0.1.0".to_string(),
+            actor: "system".to_string(),
+        }
+    }
+
+    fn write_root_container_with_derivation(
+        root_path: &Path,
+        root_id: &str,
+        file_object_id: &str,
+        file_bytes: &[u8],
+        cross_derivation: Option<(&str, &str)>,
+    ) -> String {
+        fs::create_dir_all(root_path.join("indexes/objects")).unwrap();
+        let file_sha = offf_core::evidence::write_evidence_object(root_path, file_bytes).unwrap();
+        let storage_ref = format!("sha256:{file_sha}");
+        let root_object_id = format!("{root_id}-root");
+
+        let objects = vec![
+            DiscoveredObjectRow {
+                object_id: root_object_id.clone(),
+                object_type: "collection_root".to_string(),
+                name: Some(root_id.to_string()),
+                logical_path: Some("/".to_string()),
+                media_type: None,
+                size_bytes: None,
+                sha256: None,
+                source_layer: "collection".to_string(),
+                storage_ref: None,
+                content_ref: None,
+                content_hash_status: None,
+                root_source_ref: None,
+                root_id: Some(root_id.to_string()),
+                collection_relative_path: None,
+                created_by_job_id: None,
+                parser_status: "ok".to_string(),
+                provenance_ref: None,
+                schema_version: OFFF_V2_VERSION.to_string(),
+                original_created_at: None,
+                original_modified_at: None,
+                original_accessed_at: None,
+            },
+            DiscoveredObjectRow {
+                object_id: file_object_id.to_string(),
+                object_type: "file".to_string(),
+                name: Some(format!("{root_id}.bin")),
+                logical_path: Some(format!("/{root_id}.bin")),
+                media_type: Some("application/octet-stream".to_string()),
+                size_bytes: Some(file_bytes.len() as u64),
+                sha256: Some(storage_ref.clone()),
+                source_layer: "collection".to_string(),
+                storage_ref: Some(storage_ref.clone()),
+                content_ref: Some(ObjectContentRef {
+                    ref_type: "evidence_object_store".to_string(),
+                    root_id: Some(root_id.to_string()),
+                    filesystem_id: None,
+                    file_id: None,
+                    file_index_path: None,
+                    storage_ref: Some(storage_ref.clone()),
+                }),
+                content_hash_status: Some("verified".to_string()),
+                root_source_ref: Some(root_object_id.clone()),
+                root_id: Some(root_id.to_string()),
+                collection_relative_path: Some(format!("{root_id}.bin")),
+                created_by_job_id: None,
+                parser_status: "ok".to_string(),
+                provenance_ref: None,
+                schema_version: OFFF_V2_VERSION.to_string(),
+                original_created_at: None,
+                original_modified_at: None,
+                original_accessed_at: None,
+            },
+        ];
+
+        let edges = vec![ObjectEdgeRow {
+            edge_id: format!("edge-{root_id}-local"),
+            parent_object_id: root_object_id.clone(),
+            child_object_id: file_object_id.to_string(),
+            parent_root_id: Some(root_id.to_string()),
+            child_root_id: Some(root_id.to_string()),
+            relation_type: "contains".to_string(),
+            method: Some("collection_capture".to_string()),
+            logical_path: Some(format!("{root_id}.bin")),
+            sequence: Some(1),
+            created_by_job_id: None,
+            provenance_ref: None,
+            schema_version: OFFF_V2_VERSION.to_string(),
+        }];
+
+        let mut derivations = Vec::new();
+        if let Some((cross_child_object_id, cross_child_root_id)) = cross_derivation {
+            derivations.push(DerivationRow {
+                derivation_id: format!("deriv-{root_id}-cross"),
+                parent_object_id: file_object_id.to_string(),
+                child_object_id: cross_child_object_id.to_string(),
+                parent_root_id: Some(root_id.to_string()),
+                child_root_id: Some(cross_child_root_id.to_string()),
+                job_id: "job-cross-root".to_string(),
+                method: "cross_root_transform".to_string(),
+                tool_id: "offf-integration-test".to_string(),
+                tool_name: "offf-integration-test".to_string(),
+                tool_version: "0.1.0".to_string(),
+                parameters_hash: None,
+                input_sha256: None,
+                output_sha256: None,
+                storage_mode: "indexed".to_string(),
+                provenance_ref: None,
+                created_at: "2026-06-03T00:00:00Z".to_string(),
+                schema_version: OFFF_V2_VERSION.to_string(),
+            });
+        }
+
+        offf_core::parquet_io::write_object_index(
+            &root_path.join("indexes/objects/object_index.parquet"),
+            &objects,
+        )
+        .unwrap();
+        offf_core::parquet_io::write_object_edges(
+            &root_path.join("indexes/objects/object_edges.parquet"),
+            &edges,
+        )
+        .unwrap();
+        offf_core::parquet_io::write_derivations(
+            &root_path.join("indexes/objects/derivations.parquet"),
+            &derivations,
+        )
+        .unwrap();
+
+        let manifest = ManifestJson {
+            offf_version: OFFF_VERSION.to_string(),
+            container_id: format!("urn:offf:root:{root_id}"),
+            created_at: chrono::Utc::now(),
+            created_by_tool: ToolInfo {
+                name: "offf-integration-test".to_string(),
+                version: "0.1.0".to_string(),
+            },
+            acquisition_mode: Some(AcquisitionMode::FileCollection),
+            source: None,
+            hashes: None,
+            chunking: None,
+            evidence_roots: Some(vec![EvidenceRoot {
+                root_id: root_id.to_string(),
+                root_type: "file_collection".to_string(),
+                description: Some(format!("{root_id} root")),
+                object_count: Some(objects.len() as u64),
+                root_hash: None,
+            }]),
+            limitations: None,
+            indexes: ManifestIndexes {
+                physical_to_chunk: None,
+                object_index: Some("indexes/objects/object_index.parquet".to_string()),
+                object_edges: Some("indexes/objects/object_edges.parquet".to_string()),
+            },
+            extensions: None,
+        };
+        fs::write(
+            root_path.join("manifest.json"),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        format!(
+            "sha256:{}",
+            hex_sha256(&fs::read(root_path.join("manifest.json")).unwrap())
+        )
+    }
+
+    let tmp = TempDir::new().unwrap();
+    let case_root = tmp.path().join("case");
+    let root_a = tmp.path().join("root-a");
+    let root_b = tmp.path().join("root-b");
+    fs::create_dir_all(&root_a).unwrap();
+    fs::create_dir_all(&root_b).unwrap();
+
+    let root_b_file = "obj-root-b-file";
+    let root_a_hash = write_root_container_with_derivation(
+        &root_a,
+        "root-a",
+        "obj-root-a-file",
+        b"alpha",
+        Some((root_b_file, "root-b")),
+    );
+    let root_b_hash = write_root_container_with_derivation(
+        &root_b,
+        "root-b",
+        root_b_file,
+        b"beta",
+        None,
+    );
+
+    let case_manifest = CaseManifest {
+        schema_version: OFFF_CASE_SCHEMA_VERSION.to_string(),
+        offf_version: OFFF_VERSION.to_string(),
+        case_id: "case-cross-root-derivation".to_string(),
+        title: Some("cross-root derivation test".to_string()),
+        created_at: chrono::Utc::now(),
+        created_by: make_actor(),
+        root_count: 2,
+        roots_registry_path: offf_core::CASE_ROOTS_REGISTRY_FILE.to_string(),
+        global_indexes: CaseGlobalIndexes {
+            object_index: offf_core::CASE_OBJECT_INDEX_FILE.to_string(),
+            object_edges: offf_core::CASE_OBJECT_EDGES_FILE.to_string(),
+            derivations: offf_core::CASE_DERIVATIONS_FILE.to_string(),
+            root_summary: None,
+            cross_root_relations: None,
+        },
+        provenance_paths: vec![offf_core::CASE_PROVENANCE_FILE.to_string()],
+        verify_reports: vec![],
+        limitations: vec![],
+    };
+
+    let roots_registry = EvidenceRootsRegistry {
+        schema_version: OFFF_CASE_SCHEMA_VERSION.to_string(),
+        case_id: "case-cross-root-derivation".to_string(),
+        roots: vec![
+            RootDescriptor {
+                root_id: "root-a".to_string(),
+                root_type: "file_collection".to_string(),
+                description: "root a".to_string(),
+                root_ref: RootRef {
+                    ref_type: RootRefType::AbsolutePath,
+                    ref_value: root_a.display().to_string(),
+                    expected_manifest_hash: Some(root_a_hash.clone()),
+                    expected_root_id: Some("root-a".to_string()),
+                    expected_root_type: Some("file_collection".to_string()),
+                    availability: RootAvailability::Online,
+                },
+                manifest_hash: root_a_hash,
+                verify_status: RootVerifyStatus::Valid,
+                attached_at: chrono::Utc::now(),
+                attached_by: make_actor(),
+                status: RootRegistryStatus::Active,
+            },
+            RootDescriptor {
+                root_id: "root-b".to_string(),
+                root_type: "file_collection".to_string(),
+                description: "root b".to_string(),
+                root_ref: RootRef {
+                    ref_type: RootRefType::AbsolutePath,
+                    ref_value: root_b.display().to_string(),
+                    expected_manifest_hash: Some(root_b_hash.clone()),
+                    expected_root_id: Some("root-b".to_string()),
+                    expected_root_type: Some("file_collection".to_string()),
+                    availability: RootAvailability::Online,
+                },
+                manifest_hash: root_b_hash,
+                verify_status: RootVerifyStatus::Valid,
+                attached_at: chrono::Utc::now(),
+                attached_by: make_actor(),
+                status: RootRegistryStatus::Active,
+            },
+        ],
+    };
+
+    offf_core::create_case(&case_root, &case_manifest, &roots_registry).unwrap();
+    let build = offf_core::build_case_global_indexes(&case_root).unwrap();
+    assert_eq!(build.cross_root_relation_count, 1);
+
+    let relations = offf_core::read_case_cross_root_relations(&case_root).unwrap();
+    assert_eq!(relations.len(), 1);
+    assert_eq!(relations[0].relation_kind, "derivation");
+    assert_eq!(relations[0].relation_type, "cross_root_transform");
+    assert_eq!(relations[0].parent_root_id, "root-a");
+    assert_eq!(relations[0].child_root_id, "root-b");
+    assert_eq!(relations[0].child_object_id, root_b_file);
 }

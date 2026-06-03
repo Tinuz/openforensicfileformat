@@ -21,6 +21,8 @@
     "derivation_id": { "type": "string", "minLength": 1 },
     "parent_object_id": { "type": "string", "minLength": 1 },
     "child_object_id": { "type": "string", "minLength": 1 },
+    "parent_root_id": { "type": ["string", "null"], "minLength": 1 },
+    "child_root_id": { "type": ["string", "null"], "minLength": 1 },
     "job_id": { "type": "string", "minLength": 1 },
     "method": { "type": "string", "minLength": 1 },
     "tool_id": { "type": "string", "minLength": 1 },

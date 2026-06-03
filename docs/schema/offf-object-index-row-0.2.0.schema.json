@@ -44,6 +44,7 @@
             "derived_object_store"
           ]
         },
+        "root_id": { "type": ["string", "null"] },
         "filesystem_id": { "type": ["string", "null"] },
         "file_id": { "type": ["string", "null"] },
         "file_index_path": { "type": ["string", "null"] },

@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 pub const OFFF_VERSION: &str = "0.1.0";
 pub const OFFF_V2_VERSION: &str = "0.2.0";
+pub const OFFF_CASE_SCHEMA_VERSION: &str = "0.1.0";
 
 // ── Partition table ───────────────────────────────────────────────────────────
 
@@ -200,6 +201,8 @@ pub struct ObjectContentRef {
     #[serde(rename = "type")]
     pub ref_type: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filesystem_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_id: Option<String>,
@@ -251,6 +254,10 @@ pub struct ObjectEdgeRow {
     pub edge_id: String,
     pub parent_object_id: String,
     pub child_object_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_root_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub child_root_id: Option<String>,
     pub relation_type: String,
     pub method: Option<String>,
     pub logical_path: Option<String>,
@@ -265,6 +272,10 @@ pub struct DerivationRow {
     pub derivation_id: String,
     pub parent_object_id: String,
     pub child_object_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_root_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub child_root_id: Option<String>,
     pub job_id: String,
     pub method: String,
     pub tool_id: String,
@@ -676,6 +687,168 @@ pub struct EvidenceRoot {
     /// Deterministic hash of the collection manifest (sorted object metadata).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub root_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RootRefType {
+    Embedded,
+    RelativePath,
+    AbsolutePath,
+    Uri,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RootAvailability {
+    Online,
+    Offline,
+    Missing,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RootVerifyStatus {
+    Unknown,
+    Valid,
+    Warning,
+    Invalid,
+    Missing,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RootRegistryStatus {
+    Active,
+    Archived,
+    Detached,
+    Missing,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolActorInfo {
+    pub tool_id: String,
+    pub tool_version: String,
+    pub actor: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CaseEventToolInfo {
+    pub tool_id: String,
+    pub tool_version: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RootRef {
+    pub ref_type: RootRefType,
+    pub ref_value: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_manifest_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_root_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_root_type: Option<String>,
+    pub availability: RootAvailability,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RootDescriptor {
+    pub root_id: String,
+    pub root_type: String,
+    pub description: String,
+    pub root_ref: RootRef,
+    pub manifest_hash: String,
+    pub verify_status: RootVerifyStatus,
+    pub attached_at: DateTime<Utc>,
+    pub attached_by: ToolActorInfo,
+    pub status: RootRegistryStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvidenceRootsRegistry {
+    pub schema_version: String,
+    pub case_id: String,
+    pub roots: Vec<RootDescriptor>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CaseGlobalIndexes {
+    pub object_index: String,
+    pub object_edges: String,
+    pub derivations: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root_summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cross_root_relations: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CaseManifest {
+    pub schema_version: String,
+    pub offf_version: String,
+    pub case_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub created_by: ToolActorInfo,
+    pub root_count: u64,
+    pub roots_registry_path: String,
+    pub global_indexes: CaseGlobalIndexes,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provenance_paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verify_reports: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub limitations: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RootSummary {
+    pub total: u64,
+    pub valid: u64,
+    pub warning: u64,
+    pub invalid: u64,
+    pub missing: u64,
+    pub offline: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CaseObjectSummary {
+    pub total_objects: u64,
+    pub roots_referenced: u64,
+    pub orphan_objects: u64,
+    pub cross_root_relations: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CaseVerifyReport {
+    pub case_id: String,
+    pub profile: String,
+    pub status: String,
+    pub root_summary: RootSummary,
+    pub object_summary: CaseObjectSummary,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub checks: Vec<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CaseProvenanceEvent {
+    pub event_id: String,
+    pub case_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root_id: Option<String>,
+    pub timestamp: DateTime<Utc>,
+    pub actor: String,
+    pub tool: CaseEventToolInfo,
+    pub action: String,
+    pub result: String,
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub details: serde_json::Value,
 }
 
 /// Source context recorded for selective acquisitions (file_collection etc.).

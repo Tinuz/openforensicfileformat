@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://offf.dev/schema/offf-case-manifest-0.1.0.schema.json",
+  "title": "OFFF Case Manifest v0.1.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "offf_version",
+    "case_id",
+    "created_at",
+    "created_by",
+    "root_count",
+    "roots_registry_path",
+    "global_indexes"
+  ],
+  "properties": {
+    "schema_version": { "type": "string", "const": "0.1.0" },
+    "offf_version": { "type": "string", "minLength": 1 },
+    "case_id": { "type": "string", "minLength": 1 },
+    "title": { "type": ["string", "null"] },
+    "created_at": { "type": "string", "format": "date-time" },
+    "created_by": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool_id", "tool_version", "actor"],
+      "properties": {
+        "tool_id": { "type": "string", "minLength": 1 },
+        "tool_version": { "type": "string", "minLength": 1 },
+        "actor": { "type": "string", "minLength": 1 }
+      }
+    },
+    "root_count": { "type": "integer", "minimum": 0 },
+    "roots_registry_path": { "type": "string", "minLength": 1 },
+    "global_indexes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["object_index", "object_edges", "derivations"],
+      "properties": {
+        "object_index": { "type": "string", "minLength": 1 },
+        "object_edges": { "type": "string", "minLength": 1 },
+        "derivations": { "type": "string", "minLength": 1 },
+        "root_summary": { "type": ["string", "null"] },
+        "cross_root_relations": { "type": ["string", "null"] }
+      }
+    },
+    "provenance_paths": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "verify_reports": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "limitations": { "type": "array", "items": { "type": "string" } }
+  }
+}
